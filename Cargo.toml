@@ -1,0 +1,39 @@
+[package]
+name = "picocalc-wezterm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# panic-probe = { version = "*" }
+cortex-m-rt = { version = "*" }
+cyw43 = { version = "*", features = [ "firmware-logs" ] }
+cyw43-pio = { version = "*" }
+embassy-embedded-hal = { version = "*" }
+embassy-executor = { version = "*", features = [ "arch-cortex-m", "executor-thread", "executor-interrupt", "task-arena-size-98304" ] }
+embassy-futures = { version = "*" }
+embassy-rp = { version = "*", features = [ "binary-info", "critical-section-impl", "unstable-pac", "time-driver", "rp235xa" ] }
+embassy-sync = { version = "*" }
+embassy-time = { version = "*" }
+embassy-usb = { version = "*" }
+embassy-usb-logger = { version = "*" }
+embedded-graphics = "0.8.0"
+embedded-graphics-core = "0.4.0"
+fixed = { version = "*" }
+fixed-macro = { version = "*" }
+log = { version = "*" }
+mipidsi = { git = "https://github.com/almindor/mipidsi.git" }
+panic-halt = { version = "*" }
+serde = { version = "*", default-features = false, features = [ "derive" ] }
+serde-json-core = { version = "*" }
+static_cell = { version = "*" }
+
+[profile.dev]
+debug = 2
+lto = true
+opt-level = "z"
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = "z"
+

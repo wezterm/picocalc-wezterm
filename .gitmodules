@@ -1,0 +1,9 @@
+[submodule "pico-sdk"]
+	path = pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk
+[submodule "picotool"]
+	path = picotool
+	url = https://github.com/raspberrypi/picotool
+[submodule "embassy"]
+	path = embassy
+	url = https://github.com/embassy-rs/embassy.git
