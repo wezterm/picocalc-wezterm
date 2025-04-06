@@ -8,6 +8,7 @@ edition = "2024"
 cortex-m-rt = { version = "*" }
 cyw43 = { version = "*", features = [ "firmware-logs" ] }
 cyw43-pio = { version = "*" }
+display-interface = "0.5.0"
 embassy-embedded-hal = { version = "*" }
 embassy-executor = { version = "*", features = [ "arch-cortex-m", "executor-thread", "executor-interrupt", "task-arena-size-98304" ] }
 embassy-futures = { version = "*" }
@@ -16,7 +17,7 @@ embassy-sync = { version = "*" }
 embassy-time = { version = "*" }
 embassy-usb = { version = "*" }
 embassy-usb-logger = { version = "*" }
-embedded-graphics = "0.8.0"
+embedded-graphics = "0.8.1"
 embedded-graphics-core = "0.4.0"
 fixed = { version = "*" }
 fixed-macro = { version = "*" }

@@ -1,16 +1,28 @@
 #![no_std]
 #![no_main]
 
-use core::str;
-use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
+use core::cell::RefCell;
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{PIO0, USB};
-use embassy_rp::pio::{self, Pio};
-use embassy_rp::{bind_interrupts, usb};
+use embassy_rp::pio::{self};
+use embassy_rp::spi::Spi;
+use embassy_rp::{bind_interrupts, spi, usb};
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_time::{Delay, Timer};
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::prelude::*;
+use embedded_graphics::text::Text;
+use mipidsi::Builder;
+use mipidsi::interface::SpiInterface;
+use mipidsi::models::ILI9488Rgb565;
+use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
 use panic_halt as _;
-use static_cell::StaticCell;
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -60,7 +72,72 @@ mod task {
 }
 
 #[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let p = embassy_rp::init(Default::default());
+
+    let miso = p.PIN_12;
+    let mosi = p.PIN_11;
+    let sclk = p.PIN_10;
+    let dcx = p.PIN_14;
+    let display_cs = p.PIN_13;
+    let rst = p.PIN_15;
+
+    // create SPI
+    let mut display_config = spi::Config::default();
+    display_config.frequency = 6_000_000;
+    display_config.phase = spi::Phase::CaptureOnSecondTransition;
+    display_config.polarity = spi::Polarity::IdleHigh;
+
+    let spi = Spi::new_blocking(p.SPI1, sclk, mosi, miso, display_config.clone());
+    let spi_bus: Mutex<NoopRawMutex, _> = Mutex::new(RefCell::new(spi));
+
+    let display_spi = SpiDeviceWithConfig::new(
+        &spi_bus,
+        Output::new(display_cs, Level::High),
+        display_config,
+    );
+
+    let dcx = Output::new(dcx, Level::Low);
+    let rst = Output::new(rst, Level::Low);
+    // dcx: 0 = command, 1 = data
+
+    // Enable LCD backlight
+    //let bl = p.PIN_13;
+    //let _bl = Output::new(bl, Level::High);
+    // Note: backlight is controlled via I2C to the keyboard
+
+    // display interface abstraction from SPI and DC
+    let mut buffer = [0_u8; 320 * 3];
+    let di = SpiInterface::new(display_spi, dcx, &mut buffer);
+
+    // Define the display from the display interface and initialize it
+    let mut display = Builder::new(ILI9488Rgb565, di)
+        .color_order(ColorOrder::Bgr)
+        .display_size(320, 320)
+        .reset_pin(rst)
+        .invert_colors(ColorInversion::Inverted)
+        .orientation(Orientation::new().flip_horizontal())
+        .init(&mut Delay)
+        .unwrap();
+    display.clear(Rgb565::BLACK).unwrap();
+
+    let style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
+    Text::new("WezTerm", Point::new(0, 20), style)
+        .draw(&mut display)
+        .unwrap();
+
+    loop {
+        Timer::after_secs(1).await;
+    }
+}
+
+/*
+#[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    use core::str;
+    use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
+    use embassy_rp::pio::Pio;
+    use static_cell::StaticCell;
     let p = embassy_rp::init(Default::default());
 
     let fw = include_bytes!("../embassy/cyw43-firmware/43439A0.bin");
@@ -95,11 +172,6 @@ async fn main(spawner: Spawner) {
     spawner.spawn(task::cyw43(runner)).unwrap();
 
     control.init(clm).await;
-    /*
-    control
-        .set_power_management(cyw43::PowerManagementMode::PowerSave)
-        .await;
-    */
 
     loop {
         // Scan WiFi networks:
@@ -110,24 +182,5 @@ async fn main(spawner: Spawner) {
             }
         }
     }
-
-    /*
-    let mut counter = 0;
-    loop {
-        counter += 1;
-        log::info!("Tick {}", counter);
-        Timer::after_secs(1).await;
-    }
-
-    let delay = Duration::from_millis(100);
-    loop {
-        info!("led on!");
-        control.gpio_set(0, true).await;
-        Timer::after(delay).await;
-
-        info!("led off!");
-        control.gpio_set(0, false).await;
-        Timer::after(delay).await;
-    }
-    */
 }
+*/
