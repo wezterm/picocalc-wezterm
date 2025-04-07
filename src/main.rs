@@ -1,31 +1,49 @@
 #![no_std]
 #![no_main]
 
-use crate::keyboard::{KeyBoardState, set_lcd_backlight};
+use crate::keyboard::{Key, KeyBoardState, KeyState, set_lcd_backlight};
 use core::cell::RefCell;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{PIO0, USB};
+use embassy_rp::peripherals::{PIO0, SPI1, USB};
 use embassy_rp::pio::{self};
 use embassy_rp::spi::Spi;
 use embassy_rp::{bind_interrupts, spi, usb};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Delay, Timer};
-use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::mono_font::{MonoFont, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
-use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9488Rgb565;
 use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
+use mipidsi::{Builder};
 use panic_halt as _;
 
+type PicoCalcDisplay<'a> = mipidsi::Display<
+    SpiInterface<
+        'a,
+        embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig<
+            'a,
+            NoopRawMutex,
+            embassy_rp::spi::Spi<'a, SPI1, embassy_rp::spi::Blocking>,
+            Output<'a>,
+        >,
+        Output<'a>,
+    >,
+    ILI9488Rgb565,
+    Output<'a>,
+>;
+
 mod keyboard;
+
+const SCREEN_HEIGHT: u16 = 320;
+const SCREEN_WIDTH: u16 = 320;
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -124,7 +142,7 @@ async fn main(spawner: Spawner) {
     // Define the display from the display interface and initialize it
     let mut display = Builder::new(ILI9488Rgb565, di)
         .color_order(ColorOrder::Bgr)
-        .display_size(320, 320)
+        .display_size(SCREEN_WIDTH, SCREEN_HEIGHT)
         .reset_pin(rst)
         .invert_colors(ColorInversion::Inverted)
         .orientation(Orientation::new().flip_horizontal())
@@ -132,15 +150,119 @@ async fn main(spawner: Spawner) {
         .unwrap();
     display.clear(Rgb565::BLACK).unwrap();
 
-    let style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
-    Text::new("WezTerm", Point::new(0, 20), style)
-        .draw(&mut display)
-        .unwrap();
+    let mut screen_model = ScreenModel::default();
+    screen_model.print("WezTerm\r\n");
 
     let mut keyboard = KeyBoardState::default();
     loop {
+        screen_model.update_display(&mut display);
+
         if let Some(key) = keyboard.process(&mut i2c_bus).await {
             log::info!("key == {key:?}");
+            if key.state == KeyState::Pressed {
+                match key.key {
+                    Key::Enter => {
+                        screen_model.print("\r\n");
+                    }
+                    Key::Char(c) => {
+                        screen_model.print_char(c);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Line {
+    pub ascii: [u8; 80],
+}
+
+impl Default for Line {
+    fn default() -> Line {
+        Line { ascii: [0x20; 80] }
+    }
+}
+
+struct ScreenModel {
+    pub lines: [Line; 60],
+    pub x: u8,
+    pub y: u8,
+    pub width: u8,
+    pub height: u8,
+    pub font: &'static MonoFont<'static>,
+}
+
+impl ScreenModel {
+    pub fn print_char(&mut self, c: char) {
+        match c {
+            '\r' => {
+                self.x = 0;
+            }
+            '\n' => {
+                self.y += 1;
+                // FIXME: scroll
+            }
+            _ => {
+                let ascii = if c.is_ascii() {
+                    c as u32 as u8
+                } else {
+                    0x20 // space
+                };
+                self.lines[self.y as usize].ascii[self.x as usize] = ascii;
+                self.x += 1;
+                if self.x >= self.width {
+                    self.y += 1;
+                    self.x = 0;
+                    // FIXME: scroll
+                }
+            }
+        }
+    }
+
+    pub fn print(&mut self, text: &str) {
+        for c in text.chars() {
+            self.print_char(c);
+        }
+    }
+
+    pub fn update_display(&self, display: &mut PicoCalcDisplay) {
+        let style = MonoTextStyle::new(self.font, Rgb565::GREEN);
+
+        for y in 0..self.height as usize {
+            let slice = &self.lines[y].ascii[0..self.width as usize];
+            let Ok(text) = core::str::from_utf8(slice) else {
+                continue;
+            };
+
+            Text::new(
+                text,
+                Point::new(
+                    0,
+                    (y * self.font.character_size.height as usize + self.font.baseline as usize)
+                        as i32,
+                ),
+                style,
+            )
+            .draw(display)
+            .unwrap();
+        }
+    }
+}
+
+impl Default for ScreenModel {
+    fn default() -> ScreenModel {
+        let font = &FONT_10X20;
+        ScreenModel {
+            x: 0,
+            y: 0,
+            width: ((SCREEN_WIDTH as u32) / (font.character_size.width + font.character_spacing))
+                as u8,
+            height: ((SCREEN_HEIGHT as u32) / font.character_size.height) as u8,
+            font,
+
+            lines: [Line::default(); 60],
         }
     }
 }
