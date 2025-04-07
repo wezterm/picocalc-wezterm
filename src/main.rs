@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use crate::keyboard::{KeyReport, read_keyboard, set_lcd_backlight};
 use core::cell::RefCell;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
@@ -24,6 +25,8 @@ use mipidsi::models::ILI9488Rgb565;
 use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
 use panic_halt as _;
 
+mod keyboard;
+
 #[unsafe(link_section = ".start_block")]
 #[used]
 pub static IMAGE_DEF: ImageDef = ImageDef::secure_exe();
@@ -33,10 +36,8 @@ pub static IMAGE_DEF: ImageDef = ImageDef::secure_exe();
 #[unsafe(link_section = ".bi_entries")]
 #[used]
 pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
-    embassy_rp::binary_info::rp_program_name!(c"Blinky Example"),
-    embassy_rp::binary_info::rp_program_description!(
-        c"This example tests the RP Pico on board LED, connected to gpio 25"
-    ),
+    embassy_rp::binary_info::rp_program_name!(c"WezTerm"),
+    embassy_rp::binary_info::rp_program_description!(c"Hardware WezTerm"),
     embassy_rp::binary_info::rp_cargo_version!(),
     embassy_rp::binary_info::rp_program_build_attribute!(),
 ];
@@ -44,6 +45,7 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
+    I2C1_IRQ => embassy_rp::i2c::InterruptHandler<embassy_rp::peripherals::I2C1>;
 });
 
 mod task {
@@ -72,8 +74,19 @@ mod task {
 }
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
+
+    // USB background task:
+    spawner
+        .spawn(task::log(usb::Driver::new(p.USB, Irqs)))
+        .unwrap();
+
+    let mut i2c_config = embassy_rp::i2c::Config::default();
+    i2c_config.frequency = 400_000;
+    let scl = p.PIN_7;
+    let sda = p.PIN_6;
+    let mut i2c_bus = embassy_rp::i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, i2c_config);
 
     let miso = p.PIN_12;
     let mosi = p.PIN_11;
@@ -84,7 +97,7 @@ async fn main(_spawner: Spawner) {
 
     // create SPI
     let mut display_config = spi::Config::default();
-    display_config.frequency = 6_000_000;
+    display_config.frequency = 40_000_000;
     display_config.phase = spi::Phase::CaptureOnSecondTransition;
     display_config.polarity = spi::Polarity::IdleHigh;
 
@@ -102,9 +115,7 @@ async fn main(_spawner: Spawner) {
     // dcx: 0 = command, 1 = data
 
     // Enable LCD backlight
-    //let bl = p.PIN_13;
-    //let _bl = Output::new(bl, Level::High);
-    // Note: backlight is controlled via I2C to the keyboard
+    set_lcd_backlight(&mut i2c_bus, 0x80).await;
 
     // display interface abstraction from SPI and DC
     let mut buffer = [0_u8; 320 * 3];
@@ -126,8 +137,16 @@ async fn main(_spawner: Spawner) {
         .draw(&mut display)
         .unwrap();
 
+    let mut last_key = KeyReport::default();
     loop {
-        Timer::after_secs(1).await;
+        if let Ok(key) = read_keyboard(&mut i2c_bus).await {
+            if key != last_key {
+                if !key.is_empty() {
+                    log::info!("key == {key:?}");
+                }
+                last_key = key;
+            }
+        }
     }
 }
 
