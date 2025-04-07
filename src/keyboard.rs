@@ -1,7 +1,7 @@
 use embassy_rp::i2c::I2c;
 use embassy_rp::peripherals::I2C1;
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone, Copy)]
 #[repr(u8)]
 pub enum KeyState {
     #[default]
@@ -22,7 +22,7 @@ impl From<u8> for KeyState {
     }
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone, Copy)]
 pub enum Key {
     #[default]
     None,
@@ -122,15 +122,67 @@ impl From<u8> for Key {
     }
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone, Copy)]
 pub struct KeyReport {
     pub state: KeyState,
     pub key: Key,
+    pub modifiers: Modifiers,
 }
 
-impl KeyReport {
-    pub fn is_empty(&self) -> bool {
-        self.state == KeyState::Idle && self.key == Key::None
+bitflags::bitflags! {
+    #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
+    pub struct Modifiers: u8 {
+        const NONE = 0;
+        const CTRL = 1;
+        const ALT = 2;
+        const LSHIFT = 4;
+        const RSHIFT = 8;
+        const SYM = 16;
+    }
+}
+
+#[derive(Default)]
+pub struct KeyBoardState {
+    last_key: (KeyState, Key),
+    modifiers: Modifiers,
+}
+
+impl KeyBoardState {
+    pub async fn process(
+        &mut self,
+        i2c_bus: &mut I2c<'_, I2C1, embassy_rp::i2c::Async>,
+    ) -> Option<KeyReport> {
+        let key = read_keyboard(i2c_bus).await.ok()?;
+        if key == self.last_key {
+            return None;
+        }
+
+        self.last_key = key;
+        let (state, key) = key;
+        match (state, key) {
+            (KeyState::Idle, Key::None) => return None,
+            (s @ KeyState::Hold | s @ KeyState::Released, Key::ModAlt) => {
+                self.modifiers.set(Modifiers::ALT, s == KeyState::Hold);
+            }
+            (s @ KeyState::Hold | s @ KeyState::Released, Key::ModControl) => {
+                self.modifiers.set(Modifiers::CTRL, s == KeyState::Hold);
+            }
+            (s @ KeyState::Hold | s @ KeyState::Released, Key::ModShiftLeft) => {
+                self.modifiers.set(Modifiers::LSHIFT, s == KeyState::Hold);
+            }
+            (s @ KeyState::Hold | s @ KeyState::Released, Key::ModShiftRight) => {
+                self.modifiers.set(Modifiers::RSHIFT, s == KeyState::Hold);
+            }
+            (s @ KeyState::Hold | s @ KeyState::Released, Key::ModSymbol) => {
+                self.modifiers.set(Modifiers::SYM, s == KeyState::Hold);
+            }
+            _ => {}
+        }
+        Some(KeyReport {
+            state,
+            key,
+            modifiers: self.modifiers,
+        })
     }
 }
 
@@ -153,13 +205,10 @@ pub async fn set_keyboard_backlight(
     let _ = i2c_bus.write_async(KBD_ADDR, [0x0a, level]).await;
 }
 
-pub async fn read_keyboard(
+async fn read_keyboard(
     i2c_bus: &mut I2c<'_, I2C1, embassy_rp::i2c::Async>,
-) -> Result<KeyReport, embassy_rp::i2c::Error> {
+) -> Result<(KeyState, Key), embassy_rp::i2c::Error> {
     let mut buf = [0u8; 2];
     i2c_bus.write_read_async(KBD_ADDR, [0x09], &mut buf).await?;
-    Ok(KeyReport {
-        state: buf[0].into(),
-        key: buf[1].into(),
-    })
+    Ok((buf[0].into(), buf[1].into()))
 }

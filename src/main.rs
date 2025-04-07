@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use crate::keyboard::{KeyReport, read_keyboard, set_lcd_backlight};
+use crate::keyboard::{KeyBoardState, set_lcd_backlight};
 use core::cell::RefCell;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
@@ -137,15 +137,10 @@ async fn main(spawner: Spawner) {
         .draw(&mut display)
         .unwrap();
 
-    let mut last_key = KeyReport::default();
+    let mut keyboard = KeyBoardState::default();
     loop {
-        if let Ok(key) = read_keyboard(&mut i2c_bus).await {
-            if key != last_key {
-                if !key.is_empty() {
-                    log::info!("key == {key:?}");
-                }
-                last_key = key;
-            }
+        if let Some(key) = keyboard.process(&mut i2c_bus).await {
+            log::info!("key == {key:?}");
         }
     }
 }

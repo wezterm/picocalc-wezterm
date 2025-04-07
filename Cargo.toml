@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 # panic-probe = { version = "*" }
+bitflags = { version="2.9.0", default-features=false }
 cortex-m-rt = { version = "*" }
 cyw43 = { version = "*", features = [ "firmware-logs" ] }
 cyw43-pio = { version = "*" }
