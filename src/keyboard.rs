@@ -1,6 +1,11 @@
 use embassy_rp::i2c::I2c;
 use embassy_rp::peripherals::I2C1;
 
+const KBD_ADDR: u8 = 0x1f;
+const REG_ID_BKL: u8 = 0x05;
+const REG_ID_FIF: u8 = 0x09;
+const REG_ID_BK2: u8 = 0x0a;
+
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
 #[repr(u8)]
 pub enum KeyState {
@@ -186,29 +191,31 @@ impl KeyBoardState {
     }
 }
 
-const KBD_ADDR: u8 = 0x1f;
-
 /// Control the lcd backlight brightness level.
 /// The firmware uses the value as a pwm signal at 10_000 Hz.
 /// https://github.com/clockworkpi/PicoCalc/blob/939b9bbad9030655a35ff07062024691abb12240/Code/picocalc_keyboard/backlight.ino#L20-L31
+#[allow(unused)]
 pub async fn set_lcd_backlight(i2c_bus: &mut I2c<'_, I2C1, embassy_rp::i2c::Async>, level: u8) {
-    let _ = i2c_bus.write_async(KBD_ADDR, [0x05, level]).await;
+    let _ = i2c_bus.write_async(KBD_ADDR, [REG_ID_BKL, level]).await;
 }
 
 /// Control the keyboard backlight brightness level.
 /// The firmware uses the value as a pwm signal at 10_000 Hz.
 /// Values < 20 turn off the keyboard backlight
+#[allow(unused)]
 pub async fn set_keyboard_backlight(
     i2c_bus: &mut I2c<'_, I2C1, embassy_rp::i2c::Async>,
     level: u8,
 ) {
-    let _ = i2c_bus.write_async(KBD_ADDR, [0x0a, level]).await;
+    let _ = i2c_bus.write_async(KBD_ADDR, [REG_ID_BK2, level]).await;
 }
 
 async fn read_keyboard(
     i2c_bus: &mut I2c<'_, I2C1, embassy_rp::i2c::Async>,
 ) -> Result<(KeyState, Key), embassy_rp::i2c::Error> {
     let mut buf = [0u8; 2];
-    i2c_bus.write_read_async(KBD_ADDR, [0x09], &mut buf).await?;
+    i2c_bus
+        .write_read_async(KBD_ADDR, [REG_ID_FIF], &mut buf)
+        .await?;
     Ok((buf[0].into(), buf[1].into()))
 }
