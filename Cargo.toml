@@ -22,6 +22,7 @@ embedded-graphics = "0.8.1"
 embedded-graphics-core = "0.4.0"
 fixed = { version = "*" }
 fixed-macro = { version = "*" }
+heapless = "0.8"
 log = { version = "*" }
 mipidsi = { git = "https://github.com/almindor/mipidsi.git" }
 panic-halt = { version = "*" }

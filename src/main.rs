@@ -3,27 +3,36 @@
 
 use crate::keyboard::{Key, KeyBoardState, KeyState, set_lcd_backlight};
 use core::cell::RefCell;
+use core::fmt::Write as _;
+use core::str;
+use cyw43::Control;
+use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{PIO0, SPI1, USB};
-use embassy_rp::pio::{self};
+use embassy_rp::pio::{
+    Pio, {self},
+};
 use embassy_rp::spi::Spi;
 use embassy_rp::{bind_interrupts, spi, usb};
 use embassy_sync::blocking_mutex::Mutex;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::lazy_lock::LazyLock;
+use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Delay, Timer};
-use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::{MonoFont, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
+use heapless::{FnvIndexSet, String};
+use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9488Rgb565;
 use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
-use mipidsi::{Builder};
 use panic_halt as _;
+use static_cell::StaticCell;
 
 type PicoCalcDisplay<'a> = mipidsi::Display<
     SpiInterface<
@@ -150,28 +159,98 @@ async fn main(spawner: Spawner) {
         .unwrap();
     display.clear(Rgb565::BLACK).unwrap();
 
-    let mut screen_model = ScreenModel::default();
-    screen_model.print("WezTerm\r\n");
+    SCREEN.get().lock().await.print("WezTerm\r\n");
+
+    let wifi_control = setup_wifi(
+        &spawner, p.PIN_23, p.PIN_24, p.PIN_25, p.PIN_29, p.PIO0, p.DMA_CH0,
+    )
+    .await;
+    spawner.spawn(wifi_scanner(wifi_control)).unwrap();
 
     let mut keyboard = KeyBoardState::default();
     loop {
-        screen_model.update_display(&mut display);
+        SCREEN.get().lock().await.update_display(&mut display);
 
         if let Some(key) = keyboard.process(&mut i2c_bus).await {
             log::info!("key == {key:?}");
             if key.state == KeyState::Pressed {
                 match key.key {
                     Key::Enter => {
-                        screen_model.print("\r\n");
+                        SCREEN.get().lock().await.print("\r\n");
                     }
                     Key::Char(c) => {
-                        screen_model.print_char(c);
+                        SCREEN.get().lock().await.print_char(c);
                     }
                     _ => {}
                 }
             }
         }
     }
+}
+
+static SCREEN: LazyLock<AsyncMutex<CriticalSectionRawMutex, ScreenModel>> =
+    LazyLock::new(|| AsyncMutex::new(ScreenModel::default()));
+
+type WifiSet = FnvIndexSet<String<32>, 16>;
+static NETWORKS: LazyLock<AsyncMutex<CriticalSectionRawMutex, WifiSet>> =
+    LazyLock::new(|| AsyncMutex::new(WifiSet::new()));
+
+#[embassy_executor::task]
+async fn wifi_scanner(mut control: Control<'static>) {
+    let mut scanner = control.scan(Default::default()).await;
+
+    while let Some(bss) = scanner.next().await {
+        if bss.ssid_len == 0 {
+            continue;
+        }
+        if let Ok(ssid_str) = str::from_utf8(&bss.ssid[0..bss.ssid_len as usize]) {
+            if let Ok(ssid) = String::try_from(ssid_str) {
+                if let Ok(true) = NETWORKS.get().lock().await.insert(ssid) {
+                    log::info!("wifi: {ssid_str} = {:?}\r\n", bss.bssid);
+                    write!(SCREEN.get().lock().await, "wifi: {ssid_str}\r\n",).ok();
+                }
+            }
+        }
+    }
+}
+
+async fn setup_wifi(
+    spawner: &Spawner,
+    pin_23: embassy_rp::peripherals::PIN_23,
+    pin_24: embassy_rp::peripherals::PIN_24,
+    pin_25: embassy_rp::peripherals::PIN_25,
+    pin_29: embassy_rp::peripherals::PIN_29,
+    pio_0: embassy_rp::peripherals::PIO0,
+    dma_ch0: embassy_rp::peripherals::DMA_CH0,
+) -> Control<'static> {
+    let fw = include_bytes!("../embassy/cyw43-firmware/43439A0.bin");
+    let clm = include_bytes!("../embassy/cyw43-firmware/43439A0_clm.bin");
+
+    // Wireless background task:
+    static STATE: StaticCell<cyw43::State> = StaticCell::new();
+    let (_net_device, mut control, runner) = {
+        let state = STATE.init(cyw43::State::new());
+        let wireless_enable = Output::new(pin_23, Level::Low);
+        let wireless_spi = {
+            let cs = Output::new(pin_25, Level::High);
+            let mut pio = Pio::new(pio_0, Irqs);
+            PioSpi::new(
+                &mut pio.common,
+                pio.sm0,
+                RM2_CLOCK_DIVIDER,
+                pio.irq0,
+                cs,
+                pin_24,
+                pin_29,
+                dma_ch0,
+            )
+        };
+        cyw43::new(state, wireless_enable, wireless_spi, fw).await
+    };
+
+    spawner.spawn(task::cyw43(runner)).unwrap();
+    control.init(clm).await;
+    control
 }
 
 #[derive(Copy, Clone)]
@@ -192,6 +271,13 @@ struct ScreenModel {
     pub width: u8,
     pub height: u8,
     pub font: &'static MonoFont<'static>,
+}
+
+impl core::fmt::Write for ScreenModel {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.print(s);
+        Ok(())
+    }
 }
 
 impl ScreenModel {
@@ -253,7 +339,8 @@ impl ScreenModel {
 
 impl Default for ScreenModel {
     fn default() -> ScreenModel {
-        let font = &FONT_10X20;
+        //let font = & embedded_graphics::mono_font::ascii::FONT_10X20;
+        let font = &embedded_graphics::mono_font::ascii::FONT_5X8;
         ScreenModel {
             x: 0,
             y: 0,
@@ -266,57 +353,3 @@ impl Default for ScreenModel {
         }
     }
 }
-
-/*
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    use core::str;
-    use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-    use embassy_rp::pio::Pio;
-    use static_cell::StaticCell;
-    let p = embassy_rp::init(Default::default());
-
-    let fw = include_bytes!("../embassy/cyw43-firmware/43439A0.bin");
-    let clm = include_bytes!("../embassy/cyw43-firmware/43439A0_clm.bin");
-
-    // USB background task:
-    spawner
-        .spawn(task::log(usb::Driver::new(p.USB, Irqs)))
-        .unwrap();
-
-    // Wireless background task:
-    static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    let (_net_device, mut control, runner) = {
-        let state = STATE.init(cyw43::State::new());
-        let wireless_enable = Output::new(p.PIN_23, Level::Low);
-        let wireless_spi = {
-            let cs = Output::new(p.PIN_25, Level::High);
-            let mut pio = Pio::new(p.PIO0, Irqs);
-            PioSpi::new(
-                &mut pio.common,
-                pio.sm0,
-                RM2_CLOCK_DIVIDER,
-                pio.irq0,
-                cs,
-                p.PIN_24,
-                p.PIN_29,
-                p.DMA_CH0,
-            )
-        };
-        cyw43::new(state, wireless_enable, wireless_spi, fw).await
-    };
-    spawner.spawn(task::cyw43(runner)).unwrap();
-
-    control.init(clm).await;
-
-    loop {
-        // Scan WiFi networks:
-        let mut scanner = control.scan(Default::default()).await;
-        while let Some(bss) = scanner.next().await {
-            if let Ok(ssid_str) = str::from_utf8(&bss.ssid) {
-                log::info!("scanned {} == {:?}", ssid_str, bss.bssid);
-            }
-        }
-    }
-}
-*/

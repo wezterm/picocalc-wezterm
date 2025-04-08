@@ -1069,6 +1069,7 @@ dependencies = [
  "embedded-graphics-core",
  "fixed",
  "fixed-macro",
+ "heapless",
  "log",
  "mipidsi",
  "panic-halt",
