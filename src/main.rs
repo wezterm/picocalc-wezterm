@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use crate::keyboard::{Key, KeyBoardState, KeyState, set_lcd_backlight};
+use crate::keyboard::{Key, KeyBoardState, KeyState, Modifiers, set_lcd_backlight};
 use core::cell::RefCell;
 use core::fmt::Write as _;
 use core::str;
@@ -175,6 +175,12 @@ async fn main(spawner: Spawner) {
             log::info!("key == {key:?}");
             if key.state == KeyState::Pressed {
                 match key.key {
+                    Key::F5 if key.modifiers == Modifiers::CTRL => {
+                        //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
+                        // See rp2350 datasheet section 5.4.8.24. reboot
+                        const REBOOT_TYPE_BOOTSEL: u32 = 2;
+                        embassy_rp::rom_data::reboot(REBOOT_TYPE_BOOTSEL, 100, 0, 0);
+                    }
                     Key::Enter => {
                         SCREEN.get().lock().await.print("\r\n");
                     }
