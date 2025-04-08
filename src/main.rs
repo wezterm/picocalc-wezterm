@@ -19,7 +19,7 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex as AsyncMutex;
-use embassy_time::{Delay, Timer};
+use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use embedded_graphics::mono_font::{MonoFont, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
@@ -103,9 +103,9 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     // USB background task:
-    spawner
-        .spawn(task::log(usb::Driver::new(p.USB, Irqs)))
-        .unwrap();
+    spawner.must_spawn(task::log(usb::Driver::new(p.USB, Irqs)));
+
+    SCREEN.get().lock().await.print("WezTerm\r\n");
 
     let mut i2c_config = embassy_rp::i2c::Config::default();
     i2c_config.frequency = 400_000;
@@ -122,15 +122,17 @@ async fn main(spawner: Spawner) {
 
     // create SPI
     let mut display_config = spi::Config::default();
-    display_config.frequency = 40_000_000;
+    display_config.frequency = 50_000_000;
     display_config.phase = spi::Phase::CaptureOnSecondTransition;
     display_config.polarity = spi::Polarity::IdleHigh;
 
+    static DISPLAY_SPI_BUS: StaticCell<
+        Mutex<NoopRawMutex, RefCell<Spi<SPI1, embassy_rp::spi::Blocking>>>,
+    > = StaticCell::new();
     let spi = Spi::new_blocking(p.SPI1, sclk, mosi, miso, display_config.clone());
-    let spi_bus: Mutex<NoopRawMutex, _> = Mutex::new(RefCell::new(spi));
 
     let display_spi = SpiDeviceWithConfig::new(
-        &spi_bus,
+        DISPLAY_SPI_BUS.init_with(|| Mutex::new(RefCell::new(spi))),
         Output::new(display_cs, Level::High),
         display_config,
     );
@@ -143,11 +145,16 @@ async fn main(spawner: Spawner) {
     set_lcd_backlight(&mut i2c_bus, 0x80).await;
 
     // display interface abstraction from SPI and DC
-    let mut buffer = [0_u8; 320 * 3];
-    let di = SpiInterface::new(display_spi, dcx, &mut buffer);
+    const DISPLAY_BUFFER_SIZE: usize = 320 * 3 * 320;
+    static DISPLAY_BUFFER: StaticCell<[u8; DISPLAY_BUFFER_SIZE]> = StaticCell::new();
+    let di = SpiInterface::new(
+        display_spi,
+        dcx,
+        DISPLAY_BUFFER.init_with(|| [0u8; DISPLAY_BUFFER_SIZE]),
+    );
 
     // Define the display from the display interface and initialize it
-    let mut display = Builder::new(ILI9488Rgb565, di)
+    let display = Builder::new(ILI9488Rgb565, di)
         .color_order(ColorOrder::Bgr)
         .display_size(SCREEN_WIDTH, SCREEN_HEIGHT)
         .reset_pin(rst)
@@ -155,20 +162,37 @@ async fn main(spawner: Spawner) {
         .orientation(Orientation::new().flip_horizontal())
         .init(&mut Delay)
         .unwrap();
-    display.clear(Rgb565::BLACK).unwrap();
+    spawner.must_spawn(screen_painter(display));
 
-    SCREEN.get().lock().await.print("WezTerm\r\n");
+    let keyboard = KeyBoardState::default();
+    spawner.must_spawn(keyboard_reader(keyboard, i2c_bus));
+
+    Timer::after(Duration::from_millis(100)).await;
 
     let wifi_control = setup_wifi(
         &spawner, p.PIN_23, p.PIN_24, p.PIN_25, p.PIN_29, p.PIO0, p.DMA_CH0,
     )
     .await;
-    spawner.spawn(wifi_scanner(wifi_control)).unwrap();
+    spawner.must_spawn(wifi_scanner(wifi_control));
 
-    let mut keyboard = KeyBoardState::default();
+    let mut ticker = Ticker::every(Duration::from_millis(100));
     loop {
-        SCREEN.get().lock().await.update_display(&mut display);
+        ticker.next().await;
+    }
+}
 
+#[embassy_executor::task]
+async fn keyboard_reader(
+    mut keyboard: KeyBoardState,
+    mut i2c_bus: embassy_rp::i2c::I2c<
+        'static,
+        embassy_rp::peripherals::I2C1,
+        embassy_rp::i2c::Async,
+    >,
+) {
+    let mut kbd_ticker = Ticker::every(Duration::from_millis(50));
+    loop {
+        kbd_ticker.next().await;
         if let Some(key) = keyboard.process(&mut i2c_bus).await {
             log::info!("key == {key:?}");
             if key.state == KeyState::Pressed {
@@ -192,6 +216,22 @@ async fn main(spawner: Spawner) {
     }
 }
 
+#[embassy_executor::task]
+async fn screen_painter(mut display: PicoCalcDisplay<'static>) {
+    // Display update takes ~128ms @ 40_000_000
+    let mut ticker = Ticker::every(Duration::from_millis(200));
+    display.clear(Rgb565::BLACK).unwrap();
+    let mut last = Instant::now();
+    loop {
+        log::trace!("slept {}ms", last.elapsed().as_millis());
+        last = Instant::now();
+        SCREEN.get().lock().await.update_display(&mut display);
+        log::trace!("paint took {}ms", last.elapsed().as_millis());
+        last = Instant::now();
+        ticker.next().await;
+    }
+}
+
 static SCREEN: LazyLock<AsyncMutex<CriticalSectionRawMutex, ScreenModel>> =
     LazyLock::new(|| AsyncMutex::new(ScreenModel::default()));
 
@@ -210,7 +250,7 @@ async fn wifi_scanner(mut control: Control<'static>) {
         if let Ok(ssid_str) = str::from_utf8(&bss.ssid[0..bss.ssid_len as usize]) {
             if let Ok(ssid) = String::try_from(ssid_str) {
                 if let Ok(true) = NETWORKS.get().lock().await.insert(ssid) {
-                    log::info!("wifi: {ssid_str} = {:?}\r\n", bss.bssid);
+                    log::info!("wifi: {ssid_str} = {:?}", bss.bssid);
                     write!(SCREEN.get().lock().await, "wifi: {ssid_str}\r\n",).ok();
                 }
             }
@@ -252,7 +292,7 @@ async fn setup_wifi(
         cyw43::new(state, wireless_enable, wireless_spi, fw).await
     };
 
-    spawner.spawn(task::cyw43(runner)).unwrap();
+    spawner.must_spawn(task::cyw43(runner));
     control.init(clm).await;
     control
 }
