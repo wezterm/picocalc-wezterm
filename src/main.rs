@@ -2,7 +2,7 @@
 #![no_main]
 
 use crate::keyboard::{Key, KeyBoardState, KeyState, Modifiers, set_lcd_backlight};
-use crate::psram::detect_psram;
+use crate::psram::init_psram;
 use core::cell::RefCell;
 use core::fmt::Write as _;
 use core::str;
@@ -12,7 +12,7 @@ use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{PIO0, SPI1, USB};
+use embassy_rp::peripherals::{PIO0, PIO1, SPI1, USB};
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::Spi;
 use embassy_rp::{bind_interrupts, spi, usb};
@@ -72,6 +72,7 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
+    PIO1_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO1>;
     I2C1_IRQ => embassy_rp::i2c::InterruptHandler<embassy_rp::peripherals::I2C1>;
 });
 
@@ -109,8 +110,10 @@ async fn main(spawner: Spawner) {
 
     SCREEN.get().lock().await.print("WezTerm\r\n");
 
+    /*
     let psram_size = detect_psram(&embassy_rp::pac::QMI);
     write!(SCREEN.get().lock().await, "psram: {psram_size:x}\r\n").ok();
+    */
 
     let mut i2c_config = embassy_rp::i2c::Config::default();
     i2c_config.frequency = 400_000;
@@ -179,6 +182,15 @@ async fn main(spawner: Spawner) {
     )
     .await;
     spawner.must_spawn(wifi_scanner(wifi_control));
+
+    Timer::after(Duration::from_secs(15)).await;
+
+    log::info!("init_psram");
+    Timer::after(Duration::from_millis(100)).await;
+    let psram = init_psram(
+        p.PIO1, p.PIN_21, p.PIN_2, p.PIN_3, p.PIN_20, p.DMA_CH1, p.DMA_CH2,
+    )
+    .await;
 
     let mut ticker = Ticker::every(Duration::from_millis(100));
     loop {
