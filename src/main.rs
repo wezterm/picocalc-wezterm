@@ -2,6 +2,7 @@
 #![no_main]
 
 use crate::keyboard::{Key, KeyBoardState, KeyState, Modifiers, set_lcd_backlight};
+use crate::psram::detect_psram;
 use core::cell::RefCell;
 use core::fmt::Write as _;
 use core::str;
@@ -48,6 +49,7 @@ type PicoCalcDisplay<'a> = mipidsi::Display<
 >;
 
 mod keyboard;
+mod psram;
 
 const SCREEN_HEIGHT: u16 = 320;
 const SCREEN_WIDTH: u16 = 320;
@@ -106,6 +108,9 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(task::log(usb::Driver::new(p.USB, Irqs)));
 
     SCREEN.get().lock().await.print("WezTerm\r\n");
+
+    let psram_size = detect_psram(&embassy_rp::pac::QMI);
+    write!(SCREEN.get().lock().await, "psram: {psram_size:x}\r\n").ok();
 
     let mut i2c_config = embassy_rp::i2c::Config::default();
     i2c_config.frequency = 400_000;
