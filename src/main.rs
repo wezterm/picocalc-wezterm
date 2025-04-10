@@ -92,13 +92,6 @@ mod task {
     ) -> ! {
         runner.run().await
     }
-
-    /*
-    #[embassy_executor::task]
-    pub async fn usb(mut usb: UsbDevice<'static, usb::Driver<'static, USB>>) -> ! {
-        usb.run().await
-    }
-    */
 }
 
 #[embassy_executor::task]
@@ -136,11 +129,6 @@ async fn main(spawner: Spawner) {
         write!(SCREEN.get().lock().await, "Panic: {msg}\r\n").ok();
     }
     spawner.must_spawn(watchdog_task(Watchdog::new(p.WATCHDOG)));
-
-    /*
-    let psram_size = detect_psram(&embassy_rp::pac::QMI);
-    write!(SCREEN.get().lock().await, "psram: {psram_size:x}\r\n").ok();
-    */
 
     let mut i2c_config = embassy_rp::i2c::Config::default();
     i2c_config.frequency = 400_000;
