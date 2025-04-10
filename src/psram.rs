@@ -1,5 +1,5 @@
 use crate::Irqs;
-use embassy_futures::join::join;
+use embassy_futures::yield_now;
 use embassy_rp::PeripheralRef;
 use embassy_rp::gpio::Drive;
 use embassy_rp::peripherals::{DMA_CH1, DMA_CH2, PIN_2, PIN_3, PIN_20, PIN_21, PIO1};
@@ -53,11 +53,8 @@ impl PsRam {
                 .await;
         } else {
             let (rx, tx) = self.sm.rx_tx();
-            join(
-                tx.dma_push(self.tx_ch.reborrow(), cmd, false),
-                rx.dma_pull(self.rx_ch.reborrow(), out, false),
-            )
-            .await;
+            tx.dma_push(self.tx_ch.reborrow(), cmd, false).await;
+            rx.dma_pull(self.rx_ch.reborrow(), out, false).await;
         }
     }
 
@@ -115,7 +112,7 @@ impl PsRam {
     pub async fn read(&mut self, mut addr: u32, mut out: &mut [u8]) {
         // Cannot get reliable reads above 4 bytes at a time.
         // out[4] will always have a bit error
-        const MAX_CHUNK: usize = 8;
+        const MAX_CHUNK: usize = 4;
         while out.len() > 0 {
             let to_read = out.len().min(MAX_CHUNK);
             //log::info!("reading {to_read} @ {addr}");
@@ -218,15 +215,15 @@ begin:
 writeloop:
     out pins, 1         side 0b00  ; Write value on pin, lower clock. CS asserted
     jmp x--, writeloop  side 0b10  ; Raise clock: this is when PSRAM reads the value. Loop if we have more to write
-    jmp !y, begin       side 0b00  ; If this is a write-only operation, jump back to beginning
+    jmp !y,  done       side 0b00  ; If this is a write-only operation, jump back to beginning
     nop                 side 0b10  ; Fudge factor of extra clock cycle; the PSRAM needs 1 extra for output to start appearing
     jmp readloop_mid    side 0b00  ; Jump to middle of readloop to decrement y and get right clock phase
 readloop:
     in pins, 1          side 0b00  ; Read value on pin, lower clock. Datasheet says to read on falling edge > 83MHz
 readloop_mid:
     jmp y--, readloop   side 0b10  ; Raise clock. Loop if we have more to read
-    nop                 side 0b00  ;
-    nop                 side 0b11  ; CS deasserted to signal that we are done
+done:
+    nop                 side 0b11  ; CS deasserted
     "#
     );
     let prog = pio.common.load_program(&p.program);
@@ -349,142 +346,91 @@ readloop_mid:
         log::info!("psram is {size} Mbits, {} bytes", psram.size);
     }
 
-    /*
-    {
-        log::info!("testing single byte reads and writes");
-        let start = Instant::now();
-        for addr in 0..psram.size {
-            let byte = !((addr & 0xff) as u8);
-            psram.write8(addr, byte).await;
-
-            if addr > 0 && addr % 1024 == 0 {
-                if start.elapsed() > Duration::from_secs(5) {
-                    log::info!(
-                        "still writing, addr={addr}, took {}ms since start kb, {}/s",
-                        start.elapsed().as_millis(),
-                        addr as u64 / start.elapsed().as_secs()
-                    );
-                }
-            }
-        }
-        let writes_took = start.elapsed();
-
-        let start = Instant::now();
-        let mut bad_count = 0;
-        for addr in 0..psram.size {
-            let byte = !((addr & 0xff) as u8);
-            let got = psram.read8(addr).await;
-            if got != byte {
-                bad_count += 1;
-                if bad_count < 5 {
-                    log::info!("bad read at addr {addr} got {got:x} vs {byte:x}");
-                }
-            }
-
-            if addr > 0 && addr % 1024 == 0 {
-                if start.elapsed() > Duration::from_secs(5) {
-                    log::info!(
-                        "still reading, addr={addr}, took {}ms since start kb, {}/s",
-                        start.elapsed().as_millis(),
-                        addr as u64 / start.elapsed().as_secs()
-                    );
-                }
-            }
-        }
-        let reads_took = start.elapsed();
-
-        log::info!(
-            "single byte check, writes took {}ms {}/s, reads took {}ms {}/s",
-            writes_took.as_millis(),
-            psram.size as u64 / writes_took.as_secs(),
-            reads_took.as_millis(),
-            psram.size as u64 / reads_took.as_secs(),
-        );
-    }
-    */
-
-    {
-        const REPORT_CHUNK: u32 = 256 * 1024;
-        const BLOCK_SIZE: usize = 8;
-        let limit = psram.size.min(512 * 1024);
-
-        log::info!("testing {BLOCK_SIZE} byte reads and writes");
-        let start = Instant::now();
-
-        fn expect(addr: u32) -> [u8; BLOCK_SIZE] {
-            /*
-                [
-                    !((addr >> 24 & 0xff) as u8),
-                    !((addr >> 16 & 0xff) as u8),
-                    !((addr >> 8 & 0xff) as u8),
-                    !((addr & 0xff) as u8),
-                ]
-            */
-            [
-                !((addr >> 24 & 0xff) as u8),
-                !((addr >> 16 & 0xff) as u8),
-                !((addr >> 8 & 0xff) as u8),
-                !((addr & 0xff) as u8),
-                ((addr >> 24 & 0xff) as u8),
-                ((addr >> 16 & 0xff) as u8),
-                ((addr >> 8 & 0xff) as u8),
-                ((addr & 0xff) as u8),
-            ]
-        }
-
-        for i in 0..limit / BLOCK_SIZE as u32 {
-            let addr = i * BLOCK_SIZE as u32;
-            let data = expect(addr);
-            psram.write(addr, &data).await;
-            if addr > 0 && addr % REPORT_CHUNK == 0 {
-                if start.elapsed() > Duration::from_secs(5) {
-                    log::info!(
-                        "still writing, addr={addr:x}, took {}s since start, {}/s",
-                        start.elapsed().as_secs(),
-                        addr as u64 / start.elapsed().as_secs().max(1)
-                    );
-                }
-            }
-        }
-        let writes_took = start.elapsed();
-
-        log::info!("Starting reads...");
-        let start = Instant::now();
-        let mut bad_count = 0;
-        for i in 0..limit / BLOCK_SIZE as u32 {
-            let addr = i * BLOCK_SIZE as u32;
-            let expect = expect(addr);
-            let mut data = [0u8; BLOCK_SIZE];
-            psram.read(addr, &mut data).await;
-            if addr == 0 {
-                log::info!("first chunk is {data:x?}, expect {expect:x?}");
-            }
-            if data != expect {
-                bad_count += 1;
-                if bad_count < 50 {
-                    log::info!("bad read at addr {addr:x} got {data:x?} vs {expect:x?}",);
-                }
-            }
-            if addr > 0 && addr % REPORT_CHUNK == 0 {
-                if start.elapsed() > Duration::from_secs(5) {
-                    log::info!(
-                        "still reading, bad={bad_count}, addr={addr:x}, took {}s since start, {}/s",
-                        start.elapsed().as_secs(),
-                        addr as u64 / start.elapsed().as_secs().max(1)
-                    );
-                }
-            }
-        }
-        let reads_took = start.elapsed();
-
-        log::info!(
-            "COMPLETED {BLOCK_SIZE} byte check of {limit} bytes. {bad_count} bad chunks. Writes took {}s {}/s, reads took {}s {}/s",
-            writes_took.as_secs(),
-            limit as u64 / writes_took.as_secs().max(1),
-            reads_took.as_secs(),
-            limit as u64 / reads_took.as_secs().max(1),
-        );
-    }
-
     psram
+}
+
+#[allow(unused)]
+async fn test_psram(psram: &mut PsRam) -> bool {
+    const REPORT_CHUNK: u32 = 256 * 1024;
+    const BLOCK_SIZE: usize = 8;
+    let limit = psram.size; //.min(4 * 1024 * 1024);
+
+    log::info!("testing {BLOCK_SIZE} byte reads and writes");
+    let start = Instant::now();
+
+    fn expect(addr: u32) -> [u8; BLOCK_SIZE] {
+        [
+            !((addr >> 24 & 0xff) as u8),
+            !((addr >> 16 & 0xff) as u8),
+            !((addr >> 8 & 0xff) as u8),
+            !((addr & 0xff) as u8),
+            ((addr >> 24 & 0xff) as u8),
+            ((addr >> 16 & 0xff) as u8),
+            ((addr >> 8 & 0xff) as u8),
+            ((addr & 0xff) as u8),
+        ]
+    }
+
+    for i in 0..limit / BLOCK_SIZE as u32 {
+        let addr = i * BLOCK_SIZE as u32;
+        let data = expect(addr);
+        psram.write(addr, &data).await;
+        if addr > 0 && addr % REPORT_CHUNK == 0 {
+            if start.elapsed() > Duration::from_secs(5) {
+                log::info!(
+                    "writing, addr={addr:x}, elapsed={}s, {}/s",
+                    start.elapsed().as_secs(),
+                    addr as u64 / start.elapsed().as_secs().max(1)
+                );
+            }
+        }
+        // Yield so that the watchdog doesn't kick in
+        yield_now().await;
+    }
+    let writes_took = start.elapsed();
+
+    log::info!("Starting reads...");
+    Timer::after(Duration::from_millis(200)).await;
+
+    let start = Instant::now();
+    let mut bad_count = 0;
+    let mut data = [0u8; BLOCK_SIZE];
+    for i in 0..limit / BLOCK_SIZE as u32 {
+        let addr = i * BLOCK_SIZE as u32;
+        let expect = expect(addr);
+        psram.read(addr, &mut data).await;
+        if addr == 0 {
+            log::info!("first chunk is {data:x?}, expect {expect:x?}");
+            Timer::after(Duration::from_millis(200)).await;
+        }
+        if data != expect {
+            bad_count += 1;
+            if bad_count < 50 {
+                log::info!("bad read @{addr:x} got {data:x?} vs {expect:x?}",);
+            }
+        }
+        if addr > 0 && addr % REPORT_CHUNK == 0 {
+            if start.elapsed() > Duration::from_secs(5) {
+                log::info!(
+                    "reading, bad={bad_count}, addr={addr:x}, elapsed={}s, {}/s",
+                    start.elapsed().as_secs(),
+                    addr as u64 / start.elapsed().as_secs().max(1)
+                );
+            }
+        }
+
+        // Yield so that the watchdog doesn't kick in
+        yield_now().await;
+    }
+    let reads_took = start.elapsed();
+
+    log::info!(
+        "COMPLETED {BLOCK_SIZE} byte check of {limit} bytes. {bad_count} bad chunks. Writes took {}s {}/s, reads took {}s {}/s",
+        writes_took.as_secs(),
+        limit as u64 / writes_took.as_secs().max(1),
+        reads_took.as_secs(),
+        limit as u64 / reads_took.as_secs().max(1),
+    );
+
+    bad_count == 0
 }

@@ -207,8 +207,6 @@ async fn main(spawner: Spawner) {
 
     Timer::after(Duration::from_secs(15)).await;
 
-    log::info!("init_psram");
-    Timer::after(Duration::from_millis(100)).await;
     let psram = init_psram(
         p.PIO1, p.PIN_21, p.PIN_2, p.PIN_3, p.PIN_20, p.DMA_CH1, p.DMA_CH2,
     )
@@ -308,7 +306,7 @@ async fn wifi_scanner(mut control: Control<'static>) {
         if let Ok(ssid_str) = str::from_utf8(&bss.ssid[0..bss.ssid_len as usize]) {
             if let Ok(ssid) = String::try_from(ssid_str) {
                 if let Ok(true) = NETWORKS.get().lock().await.insert(ssid) {
-                    log::info!("wifi: {ssid_str} = {:?}", bss.bssid);
+                    log::info!("wifi: {ssid_str} = {:x?}", bss.bssid);
                     write!(SCREEN.get().lock().await, "wifi: {ssid_str}\r\n",).ok();
                 }
             }
