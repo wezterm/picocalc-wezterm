@@ -556,6 +556,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-hal-bus"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513e0b3a8fb7d3013a8ae17a834283f170deaf7d0eeab0a7c1a36ad4dd356d22"
+dependencies = [
+ "critical-section",
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
 name = "embedded-hal-nb"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -578,6 +588,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ff09972d4073aa8c299395be75161d582e7629cd663171d62af73c8d50dba3f"
 dependencies = [
  "embedded-io",
+]
+
+[[package]]
+name = "embedded-sdmmc"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb637331040ec9b35f6a8151904d1aca914cc349d14c91b9a3e92ba789b22f3f"
+dependencies = [
+ "byteorder",
+ "embedded-hal 1.0.0",
+ "heapless",
+ "log",
 ]
 
 [[package]]
@@ -1096,8 +1118,10 @@ dependencies = [
  "embassy-usb-logger",
  "embedded-graphics",
  "embedded-graphics-core",
+ "embedded-hal-bus",
  "embedded-io",
  "embedded-io-async",
+ "embedded-sdmmc",
  "fixed",
  "fixed-macro",
  "heapless",

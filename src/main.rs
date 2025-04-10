@@ -9,6 +9,7 @@ use core::fmt::Write as _;
 use core::str;
 use cyw43::Control;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
+use embassy_embedded_hal::SetConfig;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::block::ImageDef;
@@ -26,6 +27,8 @@ use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
+use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_sdmmc::sdcard::SdCard;
 use heapless::{FnvIndexSet, String};
 use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
@@ -194,7 +197,60 @@ async fn main(spawner: Spawner) {
     .await;
     spawner.must_spawn(wifi_scanner(wifi_control));
 
-    Timer::after(Duration::from_secs(15)).await;
+    Timer::after(Duration::from_secs(5)).await;
+    {
+        struct DummyTimesource();
+
+        impl embedded_sdmmc::TimeSource for DummyTimesource {
+            fn get_timestamp(&self) -> embedded_sdmmc::Timestamp {
+                embedded_sdmmc::Timestamp {
+                    year_since_1970: 0,
+                    zero_indexed_month: 0,
+                    zero_indexed_day: 0,
+                    hours: 0,
+                    minutes: 0,
+                    seconds: 0,
+                }
+            }
+        }
+
+        let mut config = embassy_rp::spi::Config::default();
+        // SPI clock needs to be running at <= 400kHz during initialization
+        config.frequency = 400_000;
+        let spi = embassy_rp::spi::Spi::new_blocking(p.SPI0, p.PIN_18, p.PIN_19, p.PIN_16, config);
+        let cs = Output::new(p.PIN_17, Level::High);
+        let spi_dev = ExclusiveDevice::new_no_delay(spi, cs).unwrap();
+
+        let sdcard = SdCard::new(spi_dev, embassy_time::Delay);
+        log::info!("Card size is {:?} bytes", sdcard.num_bytes());
+
+        // Now that the card is initialized, the SPI clock can go faster
+        let mut config = spi::Config::default();
+        config.frequency = 16_000_000;
+        sdcard
+            .spi(|dev| SetConfig::set_config(dev.bus_mut(), &config))
+            .ok();
+
+        // Now let's look for volumes (also known as partitions) on our block device.
+        // To do this we need a Volume Manager. It will take ownership of the block device.
+        let mut volume_mgr = embedded_sdmmc::VolumeManager::new(sdcard, DummyTimesource());
+
+        // Try and access Volume 0 (i.e. the first partition).
+        // The volume object holds information about the filesystem on that volume.
+        if let Ok(mut volume0) = volume_mgr.open_volume(embedded_sdmmc::VolumeIdx(0)) {
+            log::info!("Volume 0: {:?}", volume0);
+
+            // Open the root directory (mutably borrows from the volume).
+            let mut root_dir = volume0.open_root_dir().unwrap();
+            root_dir
+                .iterate_dir(|entry| {
+                    log::info!("entry - {}", entry.name);
+                })
+                .ok();
+        }
+    }
+
+    Timer::after(Duration::from_secs(10)).await;
 
     let psram = init_psram(
         p.PIO1, p.PIN_21, p.PIN_2, p.PIN_3, p.PIN_20, p.DMA_CH1, p.DMA_CH2,
