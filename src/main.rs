@@ -12,9 +12,10 @@ use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{PIO0, PIO1, SPI1, USB};
+use embassy_rp::peripherals::{PIO0, PIO1, SPI1, UART0, USB};
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::Spi;
+use embassy_rp::uart::BufferedInterruptHandler;
 use embassy_rp::watchdog::Watchdog;
 use embassy_rp::{bind_interrupts, spi, usb};
 use embassy_sync::blocking_mutex::Mutex;
@@ -51,6 +52,7 @@ type PicoCalcDisplay<'a> = mipidsi::Display<
 >;
 
 mod keyboard;
+mod logging;
 mod psram;
 
 const SCREEN_HEIGHT: u16 = 320;
@@ -76,14 +78,13 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
     PIO1_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO1>;
     I2C1_IRQ => embassy_rp::i2c::InterruptHandler<embassy_rp::peripherals::I2C1>;
+    UART0_IRQ => BufferedInterruptHandler<UART0>;
 });
 
 mod task {
     use cyw43_pio::PioSpi;
     use embassy_rp::gpio::Output;
-    use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
-    use embassy_rp::usb;
-    use embassy_usb::UsbDevice;
+    use embassy_rp::peripherals::{DMA_CH0, PIO0};
 
     #[embassy_executor::task]
     pub async fn cyw43(
@@ -92,20 +93,18 @@ mod task {
         runner.run().await
     }
 
-    #[embassy_executor::task]
-    pub async fn log(driver: usb::Driver<'static, USB>) {
-        embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
-    }
-
+    /*
     #[embassy_executor::task]
     pub async fn usb(mut usb: UsbDevice<'static, usb::Driver<'static, USB>>) -> ! {
         usb.run().await
     }
+    */
 }
 
 #[embassy_executor::task]
 async fn watchdog_task(mut watchdog: Watchdog) {
     if let Some(reason) = watchdog.reset_reason() {
+        log::error!("Watchdog reset reason: {reason:?}");
         write!(SCREEN.get().lock().await, "Reset reason: {reason:?}\r\n").ok();
     }
 
@@ -122,8 +121,14 @@ async fn watchdog_task(mut watchdog: Watchdog) {
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
-    // USB background task:
-    spawner.must_spawn(task::log(usb::Driver::new(p.USB, Irqs)));
+    crate::logging::setup_logging(
+        &spawner,
+        p.PIN_0,
+        p.PIN_1,
+        p.UART0,
+        usb::Driver::new(p.USB, Irqs),
+    )
+    .await;
 
     SCREEN.get().lock().await.print("WezTerm\r\n");
     if let Some(msg) = panic_persist::get_panic_message_utf8() {

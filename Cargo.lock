@@ -1096,6 +1096,8 @@ dependencies = [
  "embassy-usb-logger",
  "embedded-graphics",
  "embedded-graphics-core",
+ "embedded-io",
+ "embedded-io-async",
  "fixed",
  "fixed-macro",
  "heapless",

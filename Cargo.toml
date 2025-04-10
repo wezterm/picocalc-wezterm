@@ -21,6 +21,8 @@ embassy-usb = { version = "*" }
 embassy-usb-logger = { version = "*" }
 embedded-graphics = "0.8.1"
 embedded-graphics-core = "0.4.0"
+embedded-io = "0.6"
+embedded-io-async = "0.6"
 fixed = { version = "*" }
 fixed-macro = { version = "*" }
 heapless = "0.8"
