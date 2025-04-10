@@ -26,7 +26,7 @@ fixed-macro = { version = "*" }
 heapless = "0.8"
 log = { version = "*" }
 mipidsi = { git = "https://github.com/almindor/mipidsi.git" }
-panic-halt = { version = "*" }
+panic-persist = {version="0.3", features=["utf8"]}
 serde = { version = "*", default-features = false, features = [ "derive" ] }
 serde-json-core = { version = "*" }
 static_cell = { version = "*" }

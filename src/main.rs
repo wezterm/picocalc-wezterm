@@ -15,6 +15,7 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{PIO0, PIO1, SPI1, USB};
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::Spi;
+use embassy_rp::watchdog::Watchdog;
 use embassy_rp::{bind_interrupts, spi, usb};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
@@ -30,7 +31,8 @@ use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9488Rgb565;
 use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
-use panic_halt as _;
+//use panic_halt as _;
+use panic_persist as _;
 use static_cell::StaticCell;
 
 type PicoCalcDisplay<'a> = mipidsi::Display<
@@ -101,6 +103,21 @@ mod task {
     }
 }
 
+#[embassy_executor::task]
+async fn watchdog_task(mut watchdog: Watchdog) {
+    if let Some(reason) = watchdog.reset_reason() {
+        write!(SCREEN.get().lock().await, "Reset reason: {reason:?}\r\n").ok();
+    }
+
+    watchdog.start(Duration::from_secs(3));
+
+    let mut ticker = Ticker::every(Duration::from_secs(2));
+    loop {
+        watchdog.feed();
+        ticker.next().await;
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
@@ -109,6 +126,11 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(task::log(usb::Driver::new(p.USB, Irqs)));
 
     SCREEN.get().lock().await.print("WezTerm\r\n");
+    if let Some(msg) = panic_persist::get_panic_message_utf8() {
+        log::error!("prior panic: {msg}");
+        write!(SCREEN.get().lock().await, "Panic: {msg}\r\n").ok();
+    }
+    spawner.must_spawn(watchdog_task(Watchdog::new(p.WATCHDOG)));
 
     /*
     let psram_size = detect_psram(&embassy_rp::pac::QMI);
@@ -213,12 +235,31 @@ async fn keyboard_reader(
         if let Some(key) = keyboard.process(&mut i2c_bus).await {
             log::info!("key == {key:?}");
             if key.state == KeyState::Pressed {
+                // See rp2350 datasheet section 5.4.8.24. reboot
+                const NO_RETURN_ON_SUCCESS: u32 = 0x100;
+                const REBOOT_TYPE_NORMAL: u32 = 0;
+                const REBOOT_TYPE_BOOTSEL: u32 = 2;
                 match key.key {
                     Key::F5 if key.modifiers == Modifiers::CTRL => {
                         //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
+                        embassy_rp::rom_data::reboot(
+                            REBOOT_TYPE_BOOTSEL | NO_RETURN_ON_SUCCESS,
+                            100,
+                            0,
+                            0,
+                        );
+                        loop {}
+                    }
+                    Key::F1 if key.modifiers == Modifiers::CTRL => {
+                        //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
                         // See rp2350 datasheet section 5.4.8.24. reboot
-                        const REBOOT_TYPE_BOOTSEL: u32 = 2;
-                        embassy_rp::rom_data::reboot(REBOOT_TYPE_BOOTSEL, 100, 0, 0);
+                        embassy_rp::rom_data::reboot(
+                            REBOOT_TYPE_NORMAL | NO_RETURN_ON_SUCCESS,
+                            100,
+                            0,
+                            0,
+                        );
+                        loop {}
                     }
                     Key::Enter => {
                         SCREEN.get().lock().await.print("\r\n");

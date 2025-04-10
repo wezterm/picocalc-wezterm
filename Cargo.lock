@@ -1014,10 +1014,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
-name = "panic-halt"
-version = "1.0.0"
+name = "panic-persist"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a513e167849a384b7f9b746e517604398518590a9142f4846a32e3c2a4de7b11"
+checksum = "32bb382689ecd2c4d2d4df9fd56700ba8d43b7b31cca11018cc0e6f8aef39fd5"
+dependencies = [
+ "cortex-m",
+]
 
 [[package]]
 name = "parking_lot"
@@ -1098,7 +1101,7 @@ dependencies = [
  "heapless",
  "log",
  "mipidsi",
- "panic-halt",
+ "panic-persist",
  "serde",
  "serde-json-core",
  "static_cell",
