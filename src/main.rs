@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use crate::keyboard::{Key, KeyBoardState, KeyState, Modifiers, set_lcd_backlight};
+use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::screen::SCREEN;
 use core::cell::RefCell;
@@ -187,8 +187,7 @@ async fn main(spawner: Spawner) {
         .unwrap();
     spawner.must_spawn(screen_painter(display));
 
-    let keyboard = KeyBoardState::default();
-    spawner.must_spawn(keyboard_reader(keyboard, i2c_bus));
+    spawner.must_spawn(crate::keyboard::keyboard_reader(i2c_bus));
 
     Timer::after(Duration::from_millis(100)).await;
 
@@ -208,60 +207,6 @@ async fn main(spawner: Spawner) {
     let mut ticker = Ticker::every(Duration::from_millis(100));
     loop {
         ticker.next().await;
-    }
-}
-
-#[embassy_executor::task]
-async fn keyboard_reader(
-    mut keyboard: KeyBoardState,
-    mut i2c_bus: embassy_rp::i2c::I2c<
-        'static,
-        embassy_rp::peripherals::I2C1,
-        embassy_rp::i2c::Async,
-    >,
-) {
-    let mut kbd_ticker = Ticker::every(Duration::from_millis(50));
-    loop {
-        kbd_ticker.next().await;
-        if let Some(key) = keyboard.process(&mut i2c_bus).await {
-            log::info!("key == {key:?}");
-            if key.state == KeyState::Pressed {
-                // See rp2350 datasheet section 5.4.8.24. reboot
-                const NO_RETURN_ON_SUCCESS: u32 = 0x100;
-                const REBOOT_TYPE_NORMAL: u32 = 0;
-                const REBOOT_TYPE_BOOTSEL: u32 = 2;
-                match key.key {
-                    Key::F5 if key.modifiers == Modifiers::CTRL => {
-                        //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
-                        embassy_rp::rom_data::reboot(
-                            REBOOT_TYPE_BOOTSEL | NO_RETURN_ON_SUCCESS,
-                            100,
-                            0,
-                            0,
-                        );
-                        loop {}
-                    }
-                    Key::F1 if key.modifiers == Modifiers::CTRL => {
-                        //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
-                        // See rp2350 datasheet section 5.4.8.24. reboot
-                        embassy_rp::rom_data::reboot(
-                            REBOOT_TYPE_NORMAL | NO_RETURN_ON_SUCCESS,
-                            100,
-                            0,
-                            0,
-                        );
-                        loop {}
-                    }
-                    Key::Enter => {
-                        SCREEN.get().lock().await.print("\r\n");
-                    }
-                    Key::Char(c) => {
-                        SCREEN.get().lock().await.print_char(c);
-                    }
-                    _ => {}
-                }
-            }
-        }
     }
 }
 

@@ -1,5 +1,7 @@
+use crate::screen::SCREEN;
 use embassy_rp::i2c::I2c;
 use embassy_rp::peripherals::I2C1;
+use embassy_time::{Duration, Ticker};
 
 const KBD_ADDR: u8 = 0x1f;
 const REG_ID_BKL: u8 = 0x05;
@@ -218,4 +220,58 @@ async fn read_keyboard(
         .write_read_async(KBD_ADDR, [REG_ID_FIF], &mut buf)
         .await?;
     Ok((buf[0].into(), buf[1].into()))
+}
+
+#[embassy_executor::task]
+pub async fn keyboard_reader(
+    mut i2c_bus: embassy_rp::i2c::I2c<
+        'static,
+        embassy_rp::peripherals::I2C1,
+        embassy_rp::i2c::Async,
+    >,
+) {
+    let mut keyboard = KeyBoardState::default();
+    let mut kbd_ticker = Ticker::every(Duration::from_millis(50));
+    loop {
+        kbd_ticker.next().await;
+        if let Some(key) = keyboard.process(&mut i2c_bus).await {
+            log::info!("key == {key:?}");
+            if key.state == KeyState::Pressed {
+                // See rp2350 datasheet section 5.4.8.24. reboot
+                const NO_RETURN_ON_SUCCESS: u32 = 0x100;
+                const REBOOT_TYPE_NORMAL: u32 = 0;
+                const REBOOT_TYPE_BOOTSEL: u32 = 2;
+                match key.key {
+                    Key::F5 if key.modifiers == Modifiers::CTRL => {
+                        //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
+                        embassy_rp::rom_data::reboot(
+                            REBOOT_TYPE_BOOTSEL | NO_RETURN_ON_SUCCESS,
+                            100,
+                            0,
+                            0,
+                        );
+                        loop {}
+                    }
+                    Key::F1 if key.modifiers == Modifiers::CTRL => {
+                        //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
+                        // See rp2350 datasheet section 5.4.8.24. reboot
+                        embassy_rp::rom_data::reboot(
+                            REBOOT_TYPE_NORMAL | NO_RETURN_ON_SUCCESS,
+                            100,
+                            0,
+                            0,
+                        );
+                        loop {}
+                    }
+                    Key::Enter => {
+                        SCREEN.get().lock().await.print("\r\n");
+                    }
+                    Key::Char(c) => {
+                        SCREEN.get().lock().await.print_char(c);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
