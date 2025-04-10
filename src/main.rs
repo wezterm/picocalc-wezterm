@@ -31,7 +31,6 @@ use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9488Rgb565;
 use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
-//use panic_halt as _;
 use panic_persist as _;
 use static_cell::StaticCell;
 
@@ -62,8 +61,6 @@ const SCREEN_WIDTH: u16 = 320;
 #[used]
 pub static IMAGE_DEF: ImageDef = ImageDef::secure_exe();
 
-// Program metadata for `picotool info`.
-// This isn't needed, but it's recomended to have these minimal entries.
 #[unsafe(link_section = ".bi_entries")]
 #[used]
 pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
