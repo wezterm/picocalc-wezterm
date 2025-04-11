@@ -7,13 +7,13 @@ use crate::psram::init_psram;
 use crate::screen::SCREEN;
 use core::cell::RefCell;
 use core::fmt::Write as _;
-use core::str;
 use cyw43::Control;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use embassy_embedded_hal::SetConfig;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::block::ImageDef;
+use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{PIO0, PIO1, SPI1, UART0, USB};
 use embassy_rp::pio::Pio;
@@ -22,20 +22,18 @@ use embassy_rp::uart::BufferedInterruptHandler;
 use embassy_rp::watchdog::Watchdog;
 use embassy_rp::{bind_interrupts, spi, usb};
 use embassy_sync::blocking_mutex::Mutex;
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
-use embassy_sync::lazy_lock::LazyLock;
-use embassy_sync::mutex::Mutex as AsyncMutex;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::sdcard::SdCard;
-use heapless::{FnvIndexSet, String};
 use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9488Rgb565;
 use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
 use panic_persist as _;
+use rand::RngCore;
 use static_cell::StaticCell;
 
 type PicoCalcDisplay<'a> = mipidsi::Display<
@@ -193,14 +191,6 @@ async fn main(spawner: Spawner) {
 
     Timer::after(Duration::from_millis(100)).await;
 
-    let wifi_control = setup_wifi(
-        &spawner, p.PIN_23, p.PIN_24, p.PIN_25, p.PIN_29, p.PIO0, p.DMA_CH0,
-    )
-    .await;
-    spawner.must_spawn(wifi_scanner(wifi_control));
-
-    Timer::after(Duration::from_secs(5)).await;
-
     let mut flash = Flash::new(p.FLASH, p.DMA_CH3);
     let wezterm_config = {
         match Configuration::load(&mut flash) {
@@ -228,6 +218,19 @@ async fn main(spawner: Spawner) {
             }
         }
     };
+
+    let wifi_control = setup_wifi(
+        &spawner,
+        p.PIN_23,
+        p.PIN_24,
+        p.PIN_25,
+        p.PIN_29,
+        p.PIO0,
+        p.DMA_CH0,
+        &wezterm_config,
+    )
+    .await;
+    // spawner.must_spawn(wifi_scanner(wifi_control));
 
     {
         struct DummyTimesource();
@@ -310,7 +313,12 @@ async fn screen_painter(mut display: PicoCalcDisplay<'static>) {
     }
 }
 
+/*
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use heapless::{FnvIndexSet, String};
 type WifiSet = FnvIndexSet<String<32>, 16>;
+use embassy_sync::lazy_lock::LazyLock;
+use embassy_sync::mutex::Mutex as AsyncMutex;
 static NETWORKS: LazyLock<AsyncMutex<CriticalSectionRawMutex, WifiSet>> =
     LazyLock::new(|| AsyncMutex::new(WifiSet::new()));
 
@@ -322,7 +330,7 @@ async fn wifi_scanner(mut control: Control<'static>) {
         if bss.ssid_len == 0 {
             continue;
         }
-        if let Ok(ssid_str) = str::from_utf8(&bss.ssid[0..bss.ssid_len as usize]) {
+        if let Ok(ssid_str) = core::str::from_utf8(&bss.ssid[0..bss.ssid_len as usize]) {
             if let Ok(ssid) = String::try_from(ssid_str) {
                 if let Ok(true) = NETWORKS.get().lock().await.insert(ssid) {
                     log::info!("wifi: {ssid_str} = {:x?}", bss.bssid);
@@ -331,6 +339,12 @@ async fn wifi_scanner(mut control: Control<'static>) {
             }
         }
     }
+}
+*/
+
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
+    runner.run().await
 }
 
 async fn setup_wifi(
@@ -341,13 +355,14 @@ async fn setup_wifi(
     pin_29: embassy_rp::peripherals::PIN_29,
     pio_0: embassy_rp::peripherals::PIO0,
     dma_ch0: embassy_rp::peripherals::DMA_CH0,
+    wezterm_config: &Configuration,
 ) -> Control<'static> {
     let fw = include_bytes!("../embassy/cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../embassy/cyw43-firmware/43439A0_clm.bin");
 
     // Wireless background task:
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    let (_net_device, mut control, runner) = {
+    let (net_device, mut control, runner) = {
         let state = STATE.init(cyw43::State::new());
         let wireless_enable = Output::new(pin_23, Level::Low);
         let wireless_spi = {
@@ -369,5 +384,59 @@ async fn setup_wifi(
 
     spawner.must_spawn(task::cyw43(runner));
     control.init(clm).await;
+    use embassy_net::StackResources;
+    static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
+
+    let mut rng = RoscRng;
+    let seed = rng.next_u64();
+
+    let config = embassy_net::Config::dhcpv4(Default::default());
+    let (stack, runner) = embassy_net::new(
+        net_device,
+        config,
+        RESOURCES.init(StackResources::new()),
+        seed,
+    );
+    spawner.must_spawn(net_task(runner));
+
+    control
+        .set_power_management(cyw43::PowerManagementMode::PowerSave)
+        .await;
+
+    write!(
+        SCREEN.get().lock().await,
+        "Connecting to {}...\r\n",
+        wezterm_config.ssid,
+    )
+    .ok();
+    loop {
+        match control
+            .join(
+                &wezterm_config.ssid,
+                cyw43::JoinOptions::new(wezterm_config.wifi_pw.as_bytes()),
+            )
+            .await
+        {
+            Ok(_) => break,
+            Err(err) => {
+                log::error!("join failed with status={}", err.status);
+                write!(
+                    SCREEN.get().lock().await,
+                    "Failed with status {}\r\n",
+                    err.status
+                )
+                .ok();
+            }
+        }
+    }
+
+    log::info!("waiting for TCP to be up...");
+    stack.wait_config_up().await;
+    log::info!("Stack is up!");
+    if let Some(v4) = stack.config_v4() {
+        log::info!("{v4:?}");
+        write!(SCREEN.get().lock().await, "IP Address {}\r\n", v4.address).ok();
+    }
+
     control
 }

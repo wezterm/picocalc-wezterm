@@ -36,6 +36,7 @@ impl Flash {
         }
     }
 
+    #[allow(unused)]
     pub async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), FlashError> {
         self.flash.read(offset, bytes).await
     }
