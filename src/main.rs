@@ -254,31 +254,36 @@ async fn main(spawner: Spawner) {
         let spi_dev = ExclusiveDevice::new_no_delay(spi, cs).unwrap();
 
         let sdcard = SdCard::new(spi_dev, embassy_time::Delay);
-        log::info!("Card size is {:?} bytes", sdcard.num_bytes());
-
-        // Now that the card is initialized, the SPI clock can go faster
-        let mut config = spi::Config::default();
-        config.frequency = 16_000_000;
-        sdcard
-            .spi(|dev| SetConfig::set_config(dev.bus_mut(), &config))
-            .ok();
-
-        // Now let's look for volumes (also known as partitions) on our block device.
-        // To do this we need a Volume Manager. It will take ownership of the block device.
-        let mut volume_mgr = embedded_sdmmc::VolumeManager::new(sdcard, DummyTimesource());
-
-        // Try and access Volume 0 (i.e. the first partition).
-        // The volume object holds information about the filesystem on that volume.
-        if let Ok(mut volume0) = volume_mgr.open_volume(embedded_sdmmc::VolumeIdx(0)) {
-            log::info!("Volume 0: {:?}", volume0);
-
-            // Open the root directory (mutably borrows from the volume).
-            let mut root_dir = volume0.open_root_dir().unwrap();
-            root_dir
-                .iterate_dir(|entry| {
-                    log::info!("entry - {}", entry.name);
-                })
+        match sdcard.num_bytes() {
+            Ok(size) => {
+                log::info!("Card size is {size} bytes");
+                write!(
+                    SCREEN.get().lock().await,
+                    "SD card size is {size} bytes\r\n",
+                )
                 .ok();
+
+                // Now that the card is initialized, the SPI clock can go faster
+                let mut config = spi::Config::default();
+                config.frequency = 16_000_000;
+                sdcard
+                    .spi(|dev| SetConfig::set_config(dev.bus_mut(), &config))
+                    .ok();
+
+                // Now let's look for volumes (also known as partitions) on our block device.
+                // To do this we need a Volume Manager. It will take ownership of the block device.
+                let mut volume_mgr = embedded_sdmmc::VolumeManager::new(sdcard, DummyTimesource());
+
+                for idx in 0..5 {
+                    if let Ok(vol) = volume_mgr.open_volume(embedded_sdmmc::VolumeIdx(idx)) {
+                        log::info!("Volume {idx}: {vol:?}");
+                        write!(SCREEN.get().lock().await, "SD card Volume {idx}\r\n").ok();
+                    }
+                }
+            }
+            Err(err) => {
+                log::error!("SD Card error: {err:?}");
+            }
         }
     }
 
