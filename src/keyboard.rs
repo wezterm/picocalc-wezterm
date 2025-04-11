@@ -278,6 +278,12 @@ pub async fn keyboard_reader(
                     Key::Enter => {
                         SCREEN.get().lock().await.print("\r\n");
                     }
+                    Key::Char('=') if key.modifiers == Modifiers::CTRL => {
+                        SCREEN.get().lock().await.increase_font();
+                    }
+                    Key::Char('-') if key.modifiers == Modifiers::CTRL => {
+                        SCREEN.get().lock().await.decrease_font();
+                    }
                     Key::Char(c) => {
                         SCREEN.get().lock().await.print_char(c);
                     }

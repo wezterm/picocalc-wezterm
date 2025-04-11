@@ -7,6 +7,16 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 
+static FONTS: &[&MonoFont] = &[
+    &profont::PROFONT_7_POINT,
+    &profont::PROFONT_9_POINT,
+    &profont::PROFONT_10_POINT,
+    &profont::PROFONT_12_POINT,
+    &profont::PROFONT_14_POINT,
+    &profont::PROFONT_18_POINT,
+    &profont::PROFONT_24_POINT,
+];
+
 pub static SCREEN: LazyLock<AsyncMutex<CriticalSectionRawMutex, ScreenModel>> =
     LazyLock::new(|| AsyncMutex::new(ScreenModel::default()));
 
@@ -28,6 +38,7 @@ pub struct ScreenModel {
     pub width: u8,
     pub height: u8,
     pub font: &'static MonoFont<'static>,
+    pub full_repaint: bool,
 }
 
 impl core::fmt::Write for ScreenModel {
@@ -70,7 +81,32 @@ impl ScreenModel {
         }
     }
 
-    pub fn update_display(&self, display: &mut PicoCalcDisplay) {
+    pub fn increase_font(&mut self) {
+        let Some(idx) = FONTS.iter().position(|&f| f == self.font) else {
+            return;
+        };
+        if let Some(font) = FONTS.get(idx + 1) {
+            self.font = font;
+            self.full_repaint = true;
+        }
+    }
+
+    pub fn decrease_font(&mut self) {
+        let Some(idx) = FONTS.iter().position(|&f| f == self.font) else {
+            return;
+        };
+        if let Some(font) = FONTS.get(idx.saturating_sub(1)) {
+            self.font = font;
+            self.full_repaint = true;
+        }
+    }
+
+    pub fn update_display(&mut self, display: &mut PicoCalcDisplay) {
+        if self.full_repaint {
+            display.clear(Rgb565::BLACK).unwrap();
+            self.full_repaint = false;
+        }
+
         let style = MonoTextStyle::new(self.font, Rgb565::GREEN);
 
         for y in 0..self.height as usize {
@@ -96,8 +132,7 @@ impl ScreenModel {
 
 impl Default for ScreenModel {
     fn default() -> ScreenModel {
-        //let font = & embedded_graphics::mono_font::ascii::FONT_10X20;
-        let font = &embedded_graphics::mono_font::ascii::FONT_5X8;
+        let font = FONTS[2];
         ScreenModel {
             x: 0,
             y: 0,
@@ -107,6 +142,7 @@ impl Default for ScreenModel {
             font,
 
             lines: [Line::default(); 60],
+            full_repaint: true,
         }
     }
 }

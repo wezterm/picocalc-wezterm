@@ -1223,6 +1223,7 @@ dependencies = [
  "mipidsi",
  "panic-persist",
  "postcard",
+ "profont",
  "rand",
  "serde",
  "serde-json-core",
@@ -1368,6 +1369,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31971752e70b8b2686d7e46ec17fb38dad4051d94024c88df49b667caea9c84"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "profont"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "016681370a9dd6e7ddb4c1a959922fd59dc45e5ebaa5ff5b13090267898ced34"
+dependencies = [
+ "embedded-graphics",
 ]
 
 [[package]]

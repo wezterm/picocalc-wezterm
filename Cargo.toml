@@ -34,6 +34,7 @@ log = { version = "*" }
 mipidsi = { git = "https://github.com/almindor/mipidsi.git" }
 panic-persist = {version="0.3", features=["utf8"]}
 postcard = {version="1.1.1", features=["embedded-io-06", "use-crc"]}
+profont = "0.7.0"
 rand = { version = "0.8.5", default-features = false }
 serde = { version = "*", default-features = false, features = [ "derive" ] }
 serde-json-core = { version = "*" }

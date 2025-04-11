@@ -24,8 +24,6 @@ use embassy_rp::{bind_interrupts, spi, usb};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
-use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::prelude::*;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::sdcard::SdCard;
 use mipidsi::Builder;
@@ -301,7 +299,6 @@ async fn main(spawner: Spawner) {
 async fn screen_painter(mut display: PicoCalcDisplay<'static>) {
     // Display update takes ~128ms @ 40_000_000
     let mut ticker = Ticker::every(Duration::from_millis(200));
-    display.clear(Rgb565::BLACK).unwrap();
     let mut last = Instant::now();
     loop {
         log::trace!("slept {}ms", last.elapsed().as_millis());
