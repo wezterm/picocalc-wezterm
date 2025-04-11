@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use crate::config::{Configuration, Flash};
 use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::screen::SCREEN;
@@ -52,6 +53,7 @@ type PicoCalcDisplay<'a> = mipidsi::Display<
     Output<'a>,
 >;
 
+mod config;
 mod keyboard;
 mod logging;
 mod psram;
@@ -198,6 +200,35 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(wifi_scanner(wifi_control));
 
     Timer::after(Duration::from_secs(5)).await;
+
+    let mut flash = Flash::new(p.FLASH, p.DMA_CH3);
+    let wezterm_config = {
+        match Configuration::load(&mut flash) {
+            Ok(config) => {
+                log::info!("Loaded configuration: {config:#?}");
+                config
+            }
+            Err(err) => {
+                log::error!("Failed to load config: {err:?}");
+                let mut config = Configuration::default();
+                config.ssid.push_str("SECRET").ok();
+                config.wifi_pw.push_str("SECRET").ok();
+                if false {
+                    // To bootstrap the config
+                    match config.save(&mut flash) {
+                        Ok(()) => {
+                            log::info!("Wrote configuration!");
+                        }
+                        Err(err) => {
+                            log::error!("Failed to write config: {err:?}");
+                        }
+                    }
+                }
+                config
+            }
+        }
+    };
+
     {
         struct DummyTimesource();
 
