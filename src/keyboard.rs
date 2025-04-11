@@ -231,6 +231,18 @@ pub async fn keyboard_reader(
     >,
 ) {
     let mut keyboard = KeyBoardState::default();
+
+    // First, drain any keys that might be buffered in its FIFO
+    // prior to the last system reset. This prevents pending
+    // key repeats of reset key combinations from triggering
+    // as soon as we restart.
+    while let Ok((state, key)) = read_keyboard(&mut i2c_bus).await {
+        if state == KeyState::Idle && key == Key::None {
+            // Drained
+            break;
+        }
+    }
+
     let mut kbd_ticker = Ticker::every(Duration::from_millis(50));
     loop {
         kbd_ticker.next().await;
