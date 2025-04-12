@@ -1,3 +1,4 @@
+#![feature(impl_trait_in_assoc_type)]
 #![no_std]
 #![no_main]
 
@@ -114,6 +115,24 @@ async fn watchdog_task(mut watchdog: Watchdog) {
         watchdog.feed();
         ticker.next().await;
     }
+}
+
+/// Returns the amount of RAM available to use as stack space.
+/// This gives a sense of the amount of free memory in the system.
+/// It is not a directly useful metric.
+/// The calculation here relies on the flip-link memory layout
+/// and assumes that the .data and .bss have been re-arranged
+/// to sit on top of the stack space.
+fn get_max_usable_stack() -> usize {
+    unsafe extern "C" {
+        /// flip-link assigns this to be exactly the stack
+        /// size from the ORIGIN(RAM). It is the top of the
+        /// stack space, and stack grows down towards zero.
+        static mut _stack_start: u8;
+    }
+
+    let start_ptr = &raw mut _stack_start as *mut u8 as usize;
+    start_ptr - 0x20000000 /* where RAM starts in memory.x */
 }
 
 #[embassy_executor::main]
@@ -243,7 +262,8 @@ async fn main(spawner: Spawner) {
     .await;
     write!(
         SCREEN.get().lock().await,
-        "RAM 512 KiB PSRAM {}\r\n",
+        "RAM {} of 512 KiB. PSRAM {}\r\n",
+        humansize::SizeFormatter::new(get_max_usable_stack(), humansize::BINARY),
         humansize::SizeFormatter::new(psram.size, humansize::BINARY)
     )
     .ok();

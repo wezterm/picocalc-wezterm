@@ -13,7 +13,7 @@ cyw43 = { version = "*", features = [ "firmware-logs" ] }
 cyw43-pio = { version = "*" }
 display-interface = "0.5.0"
 embassy-embedded-hal = { version = "*" }
-embassy-executor = { version = "*", features = [ "arch-cortex-m", "executor-thread", "executor-interrupt", "task-arena-size-98304" ] }
+embassy-executor = { version = "*", features = [ "arch-cortex-m", "executor-thread", "executor-interrupt", "nightly" ] }
 embassy-futures = { version = "*" }
 embassy-net = { version = "*", features = ["proto-ipv4", "tcp", "dhcpv4", "dns"] }
 embassy-rp = { version = "*", features = [ "binary-info", "critical-section-impl", "unstable-pac", "time-driver", "rp235xa" ] }
@@ -54,4 +54,6 @@ opt-level = "z"
 debug = 2
 lto = true
 opt-level = "z"
+incremental = false
+codegen-units = 1
 

@@ -2,6 +2,7 @@
 # runner = "probe-rs run --chip RP2040 --protocol swd"
 # runner = "elf2uf2-rs -d"
 runner = "picotool load -u -v -x -t elf"
+linker = "flip-link"
 
 # rustflags = [
 #   "-C", "linker=flip-link",

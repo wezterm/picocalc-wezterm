@@ -1,4 +1,18 @@
 
+# Building it
+
+You need `flip-link` to re-arrange the memory layout:
+
+```console
+$ cargo install flip-link
+```
+
+if for some reason this doesn't work out, comment out the `linker` line from
+`.cargo/config.toml`, but note that the estimation of available RAM printed
+on boot will be incorrect.
+
+# Other info
+
 ## Connections
 
 ## Serial
