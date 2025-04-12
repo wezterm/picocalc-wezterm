@@ -430,6 +430,7 @@ async fn ssh_channel_task(mut channel: ChanInOut<'static, 'static>) {
                 match core::str::from_utf8(&buf[0..n]) {
                     Ok(s) => {
                         log::info!("{s}");
+                        write!(SCREEN.get().lock().await, "{s}").ok();
                     }
                     Err(err) => {
                         log::error!("failed utf8: {err:?}");
@@ -452,9 +453,13 @@ async fn ssh_channel_task(mut channel: ChanInOut<'static, 'static>) {
 async fn ssh_session_task(stack: Stack<'static>) {
     let dns_client = DnsSocket::new(stack);
 
-    match dns_client.query("foo.lan", DnsQueryType::A).await {
+    let host = "foo.lan";
+
+    write!(SCREEN.get().lock().await, "$ ssh {host}\r\n").ok();
+
+    match dns_client.query(host, DnsQueryType::A).await {
         Ok(addrs) => {
-            log::info!("foo.lan -> {addrs:?}");
+            log::info!("{host} -> {addrs:?}");
             let mut tcp_socket = TcpSocket::new(stack, static_bytes!(8192), static_bytes!(8192));
 
             match tcp_socket
@@ -467,6 +472,12 @@ async fn ssh_session_task(stack: Stack<'static>) {
                 Ok(()) => {
                     use embassy_futures::join::join;
                     log::info!("Connected to port 22!");
+                    write!(
+                        SCREEN.get().lock().await,
+                        "Connected to {host} {}:22\r\n",
+                        addrs[0]
+                    )
+                    .ok();
                     let (mut read, mut write) = tcp_socket.split();
                     let ssh_client = mk_static!(
                         SSHClient,
@@ -549,7 +560,10 @@ async fn ssh_session_task(stack: Stack<'static>) {
                                             log::error!("requesting pty failed {err:?}");
                                         }
                                         log::info!("setting command");
-                                        if let Err(err) = s.cmd(&SessionCommand::Exec("uname -a")) {
+                                        let command = "uname -a";
+                                        write!(SCREEN.get().lock().await, "execute {command}\r\n")
+                                            .ok();
+                                        if let Err(err) = s.cmd(&SessionCommand::Exec(command)) {
                                             log::error!("command failed: {err:?}");
                                         }
                                         log::info!("SessionOpened completed");
