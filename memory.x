@@ -11,7 +11,7 @@ MEMORY {
      * This is usually good for performance, as it distributes load on
      * those banks evenly.
      */
-    RAM : ORIGIN = 0x20001000, LENGTH = 511K
+    RAM : ORIGIN = 0x20000000, LENGTH = 512K
     /*
      * RAM banks 8 and 9 use a direct mapping. They can be used to have
      * memory areas dedicated for some specific job, improving predictability
@@ -20,11 +20,10 @@ MEMORY {
      */
     SRAM4 : ORIGIN = 0x20080000, LENGTH = 4K
     SRAM5 : ORIGIN = 0x20081000, LENGTH = 4K
-    PANDUMP : ORIGIN = 0x20000000, LENGTH = 1K
 }
 
-_panic_dump_start = ORIGIN(PANDUMP);
-_panic_dump_end   = ORIGIN(PANDUMP) + LENGTH(PANDUMP);
+_panic_dump_start = ORIGIN(SRAM4);
+_panic_dump_end   = ORIGIN(SRAM4) + LENGTH(SRAM4);
 
 SECTIONS {
     /* ### Boot ROM info

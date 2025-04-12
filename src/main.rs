@@ -12,6 +12,9 @@ use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use embassy_embedded_hal::SetConfig;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
+use embassy_net::dns::{DnsQueryType, DnsSocket};
+use embassy_net::tcp::TcpSocket;
+use embassy_net::{IpEndpoint, Stack};
 use embassy_rp::block::ImageDef;
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Level, Output};
@@ -25,7 +28,9 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_io_async::{Read, Write};
 use embedded_sdmmc::sdcard::SdCard;
+use heapless::Vec;
 use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9488Rgb565;
@@ -33,6 +38,8 @@ use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
 use panic_persist as _;
 use rand::RngCore;
 use static_cell::StaticCell;
+use sunset::{CliEvent, SessionCommand};
+use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
 
 type PicoCalcDisplay<'a> = mipidsi::Display<
     SpiInterface<
@@ -96,7 +103,6 @@ mod task {
 async fn watchdog_task(mut watchdog: Watchdog) {
     if let Some(reason) = watchdog.reset_reason() {
         log::error!("Watchdog reset reason: {reason:?}");
-        write!(SCREEN.get().lock().await, "Reset reason: {reason:?}\r\n").ok();
     }
 
     watchdog.start(Duration::from_secs(3));
@@ -121,7 +127,12 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    SCREEN.get().lock().await.print("WezTerm\r\n");
+    write!(
+        SCREEN.get().lock().await,
+        "WezTerm {}\r\n",
+        env!("CARGO_PKG_VERSION")
+    )
+    .ok();
     if let Some(msg) = panic_persist::get_panic_message_utf8() {
         log::error!("prior panic: {msg}");
         write!(SCREEN.get().lock().await, "Panic: {msg}\r\n").ok();
@@ -217,18 +228,16 @@ async fn main(spawner: Spawner) {
         }
     };
 
-    let wifi_control = setup_wifi(
-        &spawner,
-        p.PIN_23,
-        p.PIN_24,
-        p.PIN_25,
-        p.PIN_29,
-        p.PIO0,
-        p.DMA_CH0,
-        &wezterm_config,
+    let psram = init_psram(
+        p.PIO1, p.PIN_21, p.PIN_2, p.PIN_3, p.PIN_20, p.DMA_CH1, p.DMA_CH2,
     )
     .await;
-    // spawner.must_spawn(wifi_scanner(wifi_control));
+    write!(
+        SCREEN.get().lock().await,
+        "RAM 512 KiB PSRAM {}\r\n",
+        humansize::SizeFormatter::new(psram.size, humansize::BINARY)
+    )
+    .ok();
 
     {
         struct DummyTimesource();
@@ -257,12 +266,6 @@ async fn main(spawner: Spawner) {
         match sdcard.num_bytes() {
             Ok(size) => {
                 log::info!("Card size is {size} bytes");
-                write!(
-                    SCREEN.get().lock().await,
-                    "SD card size is {size} bytes\r\n",
-                )
-                .ok();
-
                 // Now that the card is initialized, the SPI clock can go faster
                 let mut config = spi::Config::default();
                 config.frequency = 16_000_000;
@@ -274,12 +277,20 @@ async fn main(spawner: Spawner) {
                 // To do this we need a Volume Manager. It will take ownership of the block device.
                 let mut volume_mgr = embedded_sdmmc::VolumeManager::new(sdcard, DummyTimesource());
 
-                for idx in 0..5 {
+                const MAX_VOLS: usize = 4;
+                let mut volumes = Vec::<usize, MAX_VOLS>::new();
+                for idx in 0..=MAX_VOLS {
                     if let Ok(vol) = volume_mgr.open_volume(embedded_sdmmc::VolumeIdx(idx)) {
                         log::info!("Volume {idx}: {vol:?}");
-                        write!(SCREEN.get().lock().await, "SD card Volume {idx}\r\n").ok();
+                        volumes.push(idx).ok();
                     }
                 }
+                write!(
+                    SCREEN.get().lock().await,
+                    "SD card {}, volumes {volumes:?}\r\n",
+                    humansize::SizeFormatter::new(size, humansize::BINARY)
+                )
+                .ok();
             }
             Err(err) => {
                 log::error!("SD Card error: {err:?}");
@@ -287,12 +298,18 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    Timer::after(Duration::from_secs(10)).await;
-
-    let psram = init_psram(
-        p.PIO1, p.PIN_21, p.PIN_2, p.PIN_3, p.PIN_20, p.DMA_CH1, p.DMA_CH2,
+    let wifi_control = setup_wifi(
+        &spawner,
+        p.PIN_23,
+        p.PIN_24,
+        p.PIN_25,
+        p.PIN_29,
+        p.PIO0,
+        p.DMA_CH0,
+        &wezterm_config,
     )
     .await;
+    // spawner.must_spawn(wifi_scanner(wifi_control));
 
     let mut ticker = Ticker::every(Duration::from_millis(100));
     loop {
@@ -349,6 +366,231 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
     runner.run().await
 }
 
+struct FakeCryptoRng(RoscRng);
+impl rand::RngCore for FakeCryptoRng {
+    fn next_u32(&mut self) -> u32 {
+        self.0.next_u32()
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0.next_u64()
+    }
+    fn fill_bytes(&mut self, buf: &mut [u8]) {
+        self.0.fill_bytes(buf)
+    }
+    fn try_fill_bytes(&mut self, buf: &mut [u8]) -> Result<(), rand::Error> {
+        self.0.try_fill_bytes(buf)
+    }
+}
+
+impl rand::CryptoRng for FakeCryptoRng {}
+
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
+
+macro_rules! static_bytes {
+    ($n:expr) => {
+        mk_static!([u8; $n], [0u8; $n])
+    };
+}
+
+#[embassy_executor::task]
+async fn ssh_channel_task(mut channel: ChanInOut<'static, 'static>) {
+    /*
+    let winch = {
+        let screen = SCREEN.get().lock().await;
+        let rows = screen.height;
+        let cols = screen.width;
+        sunset::packets::WinChange {
+            rows: rows.into(),
+            cols: cols.into(),
+            width: SCREEN_WIDTH as u32,
+            height: SCREEN_HEIGHT as u32,
+        }
+    };
+    log::info!("sending window size {winch:?}");
+    if let Err(err) = channel.term_window_change(winch).await {
+        log::error!("winch failed: {err:?}");
+    }
+
+    log::info!("sending uname command");
+    if let Err(err) = channel.write_all("uname -a\r\n".as_bytes()).await {
+        log::error!("error sending command: {err:?}");
+    }
+    */
+
+    log::info!("ssh_channel_task waiting for output");
+    loop {
+        let mut buf = [0u8; 1024];
+        match channel.read(&mut buf).await {
+            Ok(n) => {
+                if n == 0 {
+                    log::warn!("EOF on ssh channel");
+                    break;
+                }
+                match core::str::from_utf8(&buf[0..n]) {
+                    Ok(s) => {
+                        log::info!("{s}");
+                    }
+                    Err(err) => {
+                        log::error!("failed utf8: {err:?}");
+                    }
+                }
+            }
+            Err(err) => {
+                log::error!("failed read: {err:?}");
+                break;
+            }
+        }
+    }
+
+    loop {
+        Timer::after(Duration::from_millis(1000)).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn ssh_session_task(stack: Stack<'static>) {
+    let dns_client = DnsSocket::new(stack);
+
+    match dns_client.query("foo.lan", DnsQueryType::A).await {
+        Ok(addrs) => {
+            log::info!("foo.lan -> {addrs:?}");
+            let mut tcp_socket = TcpSocket::new(stack, static_bytes!(8192), static_bytes!(8192));
+
+            match tcp_socket
+                .connect(IpEndpoint {
+                    addr: addrs[0],
+                    port: 22,
+                })
+                .await
+            {
+                Ok(()) => {
+                    use embassy_futures::join::join;
+                    log::info!("Connected to port 22!");
+                    let (mut read, mut write) = tcp_socket.split();
+                    let ssh_client = mk_static!(
+                        SSHClient,
+                        SSHClient::new(static_bytes!(8192), static_bytes!(8192))
+                            .expect("SSHClient::new")
+                    );
+
+                    let session_authd_chan =
+                        embassy_sync::channel::Channel::<NoopRawMutex, (), 1>::new();
+                    let wait_for_auth = session_authd_chan.receiver();
+
+                    let spawn_session_future = async {
+                        let _ = wait_for_auth.receive().await;
+
+                        log::info!("try open pty");
+                        let channel = ssh_client.open_session_pty().await.expect("openpty failed");
+                        log::info!("pty opened, spawn client task");
+                        Spawner::for_current_executor()
+                            .await
+                            .must_spawn(ssh_channel_task(channel));
+                    };
+
+                    let runner = ssh_client.run(&mut read, &mut write);
+                    let mut progress = ProgressHolder::new();
+                    let ssh_ticker = async {
+                        loop {
+                            match ssh_client.progress(&mut progress).await {
+                                Ok(event) => match event {
+                                    CliEvent::Hostkey(k) => {
+                                        log::info!("host key {:?}", k.hostkey());
+                                        k.accept().expect("accept hostkey");
+                                    }
+                                    CliEvent::Banner(b) => {
+                                        if let Ok(b) = b.banner() {
+                                            log::info!("banner: {b}");
+                                        }
+                                    }
+                                    CliEvent::Username(req) => {
+                                        req.username("wez").expect("set user");
+                                    }
+                                    CliEvent::Password(req) => {
+                                        req.password("SECRET").expect("set pw");
+                                    }
+                                    CliEvent::Pubkey(req) => {
+                                        req.skip().expect("skip pubkey");
+                                    }
+                                    CliEvent::AgentSign(req) => {
+                                        req.skip().expect("skip agentsign");
+                                    }
+                                    CliEvent::Authenticated => {
+                                        log::info!("Authenticated!");
+                                        session_authd_chan.sender().send(()).await;
+                                    }
+                                    CliEvent::SessionOpened(mut s) => {
+                                        log::info!("session opened channel {}", s.channel());
+
+                                        use heapless::{String, Vec};
+
+                                        let mut term = String::<32>::new();
+                                        let _ = term.push_str("xterm").unwrap();
+
+                                        let pty = {
+                                            let screen = SCREEN.get().lock().await;
+                                            let rows = screen.height;
+                                            let cols = screen.width;
+
+                                            sunset::Pty {
+                                                term,
+                                                rows: rows.into(),
+                                                cols: cols.into(),
+                                                width: SCREEN_WIDTH as u32,
+                                                height: SCREEN_HEIGHT as u32,
+                                                modes: Vec::new(),
+                                            }
+                                        };
+
+                                        log::info!("requesting pty {pty:?}");
+                                        if let Err(err) = s.pty(pty) {
+                                            log::error!("requesting pty failed {err:?}");
+                                        }
+                                        log::info!("setting command");
+                                        if let Err(err) = s.cmd(&SessionCommand::Exec("uname -a")) {
+                                            log::error!("command failed: {err:?}");
+                                        }
+                                        log::info!("SessionOpened completed");
+                                    }
+                                    CliEvent::SessionExit(x) => {
+                                        log::info!("session exit with {x:?}");
+                                    }
+                                    CliEvent::Defunct => {
+                                        log::error!("ssh session terminated");
+                                        break;
+                                    }
+                                },
+                                Err(err) => {
+                                    log::error!("ssh progress error: {err:?}");
+                                    break;
+                                }
+                            }
+                        }
+
+                        Ok::<(), ()>(())
+                    };
+
+                    let res = join(runner, join(ssh_ticker, spawn_session_future)).await;
+                    log::info!("ssh result is {res:?}");
+                }
+                Err(err) => {
+                    log::error!("failed to connect to port 22: {err:?}");
+                }
+            }
+        }
+        Err(err) => {
+            log::error!("failed foo.lan: {err:?}");
+        }
+    }
+}
+
 async fn setup_wifi(
     spawner: &Spawner,
     pin_23: embassy_rp::peripherals::PIN_23,
@@ -389,8 +631,12 @@ async fn setup_wifi(
     use embassy_net::StackResources;
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
 
-    let mut rng = RoscRng;
+    static RNG: StaticCell<FakeCryptoRng> = StaticCell::new();
+    let rng = RNG.init_with(|| FakeCryptoRng(RoscRng));
     let seed = rng.next_u64();
+    unsafe {
+        sunset::random::assign_rng(rng);
+    }
 
     let config = embassy_net::Config::dhcpv4(Default::default());
     let (stack, runner) = embassy_net::new(
@@ -402,7 +648,7 @@ async fn setup_wifi(
     spawner.must_spawn(net_task(runner));
 
     control
-        .set_power_management(cyw43::PowerManagementMode::PowerSave)
+        .set_power_management(cyw43::PowerManagementMode::None)
         .await;
 
     write!(
@@ -439,6 +685,8 @@ async fn setup_wifi(
         log::info!("{v4:?}");
         write!(SCREEN.get().lock().await, "IP Address {}\r\n", v4.address).ok();
     }
+
+    spawner.must_spawn(ssh_session_task(stack));
 
     control
 }

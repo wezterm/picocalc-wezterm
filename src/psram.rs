@@ -41,7 +41,7 @@ pub struct PsRam {
     sm: embassy_rp::pio::StateMachine<'static, PIO1, 0>,
     tx_ch: PeripheralRef<'static, DMA_CH1>,
     rx_ch: PeripheralRef<'static, DMA_CH2>,
-    size: u32,
+    pub size: u32,
 }
 
 impl PsRam {
