@@ -262,9 +262,9 @@ async fn main(spawner: Spawner) {
     .await;
     write!(
         SCREEN.get().lock().await,
-        "RAM {} of 512 KiB. PSRAM {}\r\n",
-        humansize::SizeFormatter::new(get_max_usable_stack(), humansize::BINARY),
-        humansize::SizeFormatter::new(psram.size, humansize::BINARY)
+        "RAM {} avail of 512KiB. PSRAM {}\r\n",
+        byte_size(get_max_usable_stack()),
+        byte_size(psram.size),
     )
     .ok();
 
@@ -317,7 +317,7 @@ async fn main(spawner: Spawner) {
                 write!(
                     SCREEN.get().lock().await,
                     "SD card {}, volumes {volumes:?}\r\n",
-                    humansize::SizeFormatter::new(size, humansize::BINARY)
+                    byte_size(size),
                 )
                 .ok();
             }
@@ -691,4 +691,13 @@ async fn setup_wifi(
     spawner.must_spawn(ssh_session_task(stack));
 
     control
+}
+
+pub fn byte_size<V: humansize::ToF64 + humansize::Unsigned>(
+    n: V,
+) -> humansize::SizeFormatter<V, humansize::FormatSizeOptions> {
+    humansize::SizeFormatter::new(
+        n,
+        humansize::FormatSizeOptions::from(humansize::BINARY).space_after_value(true),
+    )
 }
