@@ -256,6 +256,7 @@ pub async fn keyboard_reader(
                 match key.key {
                     Key::F5 if key.modifiers == Modifiers::CTRL => {
                         //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
+                        log::warn!("Rebooting into BOOTSEL...");
                         embassy_rp::rom_data::reboot(
                             REBOOT_TYPE_BOOTSEL | NO_RETURN_ON_SUCCESS,
                             100,
@@ -267,6 +268,7 @@ pub async fn keyboard_reader(
                     Key::F1 if key.modifiers == Modifiers::CTRL => {
                         //embassy_rp::reset_to_usb_boot(0, 0); // for rp2040
                         // See rp2350 datasheet section 5.4.8.24. reboot
+                        log::warn!("Rebooting...");
                         embassy_rp::rom_data::reboot(
                             REBOOT_TYPE_NORMAL | NO_RETURN_ON_SUCCESS,
                             100,

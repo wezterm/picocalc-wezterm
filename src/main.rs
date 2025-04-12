@@ -4,6 +4,7 @@
 use crate::config::{CONFIG, Flash};
 use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
+use crate::rng::WezTermRng;
 use crate::screen::SCREEN;
 use core::cell::RefCell;
 use core::fmt::Write as _;
@@ -16,9 +17,8 @@ use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpEndpoint, Stack};
 use embassy_rp::block::ImageDef;
-use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{PIO0, PIO1, SPI1, UART0, USB};
+use embassy_rp::peripherals::{PIO0, PIO1, SPI1, TRNG, UART0, USB};
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::Spi;
 use embassy_rp::uart::BufferedInterruptHandler;
@@ -26,7 +26,7 @@ use embassy_rp::watchdog::Watchdog;
 use embassy_rp::{bind_interrupts, spi, usb};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
+use embassy_time::{Delay, Duration, Ticker, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_io_async::{Read, Write};
 use embedded_sdmmc::sdcard::SdCard;
@@ -36,7 +36,7 @@ use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9488Rgb565;
 use mipidsi::options::{ColorInversion, ColorOrder, Orientation};
 use panic_persist as _;
-use rand::RngCore;
+use rand_core::RngCore;
 use static_cell::StaticCell;
 use sunset::{CliEvent, SessionCommand};
 use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
@@ -60,6 +60,7 @@ mod config;
 mod keyboard;
 mod logging;
 mod psram;
+mod rng;
 mod screen;
 
 const SCREEN_HEIGHT: u16 = 320;
@@ -84,6 +85,7 @@ bind_interrupts!(struct Irqs {
     PIO1_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO1>;
     I2C1_IRQ => embassy_rp::i2c::InterruptHandler<embassy_rp::peripherals::I2C1>;
     UART0_IRQ => BufferedInterruptHandler<UART0>;
+    TRNG_IRQ => embassy_rp::trng::InterruptHandler<TRNG>;
 });
 
 mod task {
@@ -138,6 +140,7 @@ async fn main(spawner: Spawner) {
         write!(SCREEN.get().lock().await, "Panic: {msg}\r\n").ok();
     }
     spawner.must_spawn(watchdog_task(Watchdog::new(p.WATCHDOG)));
+    crate::rng::init_rng(p.TRNG);
 
     let mut i2c_config = embassy_rp::i2c::Config::default();
     i2c_config.frequency = 400_000;
@@ -359,24 +362,6 @@ async fn wifi_scanner(mut control: Control<'static>) {
 async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
     runner.run().await
 }
-
-struct FakeCryptoRng(RoscRng);
-impl rand::RngCore for FakeCryptoRng {
-    fn next_u32(&mut self) -> u32 {
-        self.0.next_u32()
-    }
-    fn next_u64(&mut self) -> u64 {
-        self.0.next_u64()
-    }
-    fn fill_bytes(&mut self, buf: &mut [u8]) {
-        self.0.fill_bytes(buf)
-    }
-    fn try_fill_bytes(&mut self, buf: &mut [u8]) -> Result<(), rand::Error> {
-        self.0.try_fill_bytes(buf)
-    }
-}
-
-impl rand::CryptoRng for FakeCryptoRng {}
 
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
@@ -639,19 +624,12 @@ async fn setup_wifi(
     use embassy_net::StackResources;
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
 
-    static RNG: StaticCell<FakeCryptoRng> = StaticCell::new();
-    let rng = RNG.init_with(|| FakeCryptoRng(RoscRng));
-    let seed = rng.next_u64();
-    unsafe {
-        sunset::random::assign_rng(rng);
-    }
-
     let config = embassy_net::Config::dhcpv4(Default::default());
     let (stack, runner) = embassy_net::new(
         net_device,
         config,
         RESOURCES.init(StackResources::new()),
-        seed,
+        WezTermRng.next_u64(),
     );
     spawner.must_spawn(net_task(runner));
 
