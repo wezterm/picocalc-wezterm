@@ -75,7 +75,7 @@ impl log::Log for Logger {
     /// Logs to both usb and the serial connection
     fn log(&self, record: &Record<'_>) {
         self.usb_logger.log(record);
-        let _ = write!(Writer(&self.pipe), "{}\r\n", record.args());
+        let _ = write!(Writer(&self.pipe), "{}\n", record.args());
     }
     fn flush(&self) {
         self.usb_logger.flush();
@@ -84,20 +84,39 @@ impl log::Log for Logger {
 
 pub struct Writer<'d, const N: usize>(&'d Pipe<CS, N>);
 
-// Lifted from
-// <https://github.com/embassy-rs/embassy/blob/6919732666bdcb4b2a4d26be348c87e4ca70280b/embassy-usb-logger/src/lib.rs#L191-L209>
-// Used here under its MIT license.
-impl<'d, const N: usize> core::fmt::Write for Writer<'d, N> {
-    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
+impl<'d, const N: usize> Writer<'d, N> {
+    fn write_slice(&mut self, b: &[u8]) {
         // The Pipe is implemented in such way that we cannot
         // write across the wraparound discontinuity.
-        let b = s.as_bytes();
         if let Ok(n) = self.0.try_write(b) {
             if n < b.len() {
                 // We wrote some data but not all, attempt again
                 // as the reason might be a wraparound in the
                 // ring buffer, which resolves on second attempt.
                 let _ = self.0.try_write(&b[n..]);
+            }
+        }
+    }
+}
+
+// Lifted from
+// <https://github.com/embassy-rs/embassy/blob/6919732666bdcb4b2a4d26be348c87e4ca70280b/embassy-usb-logger/src/lib.rs#L191-L209>
+// Used here under its MIT license.
+impl<'d, const N: usize> core::fmt::Write for Writer<'d, N> {
+    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
+        // We need to translate \n to \r\n for serial to be happiest
+        let b = s.as_bytes();
+
+        for chunk in b.split_inclusive(|&c| c == b'\n') {
+            let (stripped, emit_crlf) = match chunk.strip_suffix(b"\n") {
+                Some(s) => (s, true),
+                None => (chunk, false),
+            };
+
+            self.write_slice(stripped);
+
+            if emit_crlf {
+                self.write_slice(b"\r\n");
             }
         }
         Ok(())
