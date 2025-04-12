@@ -1,5 +1,8 @@
-use embassy_rp::flash::{Async, Error as FlashError, Flash as RpFlash};
+use embassy_rp::flash::{Async, ERASE_SIZE, Error as FlashError, Flash as RpFlash, WRITE_SIZE};
 use embassy_rp::peripherals::{DMA_CH3, FLASH};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::lazy_lock::LazyLock;
+use embassy_sync::mutex::Mutex;
 use embedded_io::ErrorKind;
 use heapless::String;
 use postcard::{Deserializer, serialize_with_flavor};
@@ -7,15 +10,26 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 const PICO2_FLASH_SIZE: usize = 4 * 1024 * 1024;
-pub const CONFIG_BASE: u32 = PICO2_FLASH_SIZE as u32 - 2048;
+pub const CONFIG_SIZE: u32 = 4096;
+pub const CONFIG_BASE: u32 = PICO2_FLASH_SIZE as u32 - CONFIG_SIZE;
+
+pub static CONFIG: LazyLock<Mutex<CriticalSectionRawMutex, Configuration>> =
+    LazyLock::new(|| Mutex::new(Configuration::default()));
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Configuration {
     pub ssid: String<32>,
     pub wifi_pw: String<32>,
+    pub ssh_pw: String<32>,
 }
 
 impl Configuration {
+    pub fn load_in_place(&mut self, flash: &mut Flash) -> Result<(), postcard::Error> {
+        let config = Self::load(flash)?;
+        *self = config;
+        Ok(())
+    }
+
     pub fn load(flash: &mut Flash) -> Result<Self, postcard::Error> {
         flash.deserialize::<Self, 128>(CONFIG_BASE)
     }
@@ -31,9 +45,14 @@ pub struct Flash {
 
 impl Flash {
     pub fn new(flash: FLASH, dma: DMA_CH3) -> Self {
-        Self {
-            flash: embassy_rp::flash::Flash::new(flash, dma),
-        }
+        let flash = embassy_rp::flash::Flash::new(flash, dma);
+        log::info!(
+            "flash capacity={}, write={}, erase={}",
+            flash.capacity(),
+            WRITE_SIZE,
+            ERASE_SIZE
+        );
+        Self { flash }
     }
 
     #[allow(unused)]
@@ -74,6 +93,17 @@ impl Flash {
             "Serialized as {} bytes in {serialized_slice:x?}",
             serialized_slice.len()
         );
+
+        assert!(
+            serialized_slice.len() <= CONFIG_SIZE as usize,
+            "{} is larger than CONFIG_SIZE {CONFIG_SIZE}",
+            serialized_slice.len()
+        );
+
+        if let Err(err) = self.flash.blocking_erase(offset, offset + CONFIG_SIZE) {
+            log::error!("Flash blocking erase of {CONFIG_SIZE} bytes @ {offset} failed: {err:?}",);
+            return Err(postcard::Error::SerdeSerCustom);
+        }
 
         match self.flash.blocking_write(offset, serialized_slice) {
             Err(err) => {

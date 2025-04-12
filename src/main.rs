@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use crate::config::{Configuration, Flash};
+use crate::config::{CONFIG, Flash};
 use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::screen::SCREEN;
@@ -201,17 +201,17 @@ async fn main(spawner: Spawner) {
     Timer::after(Duration::from_millis(100)).await;
 
     let mut flash = Flash::new(p.FLASH, p.DMA_CH3);
-    let wezterm_config = {
-        match Configuration::load(&mut flash) {
-            Ok(config) => {
+    {
+        let mut config = CONFIG.get().lock().await;
+        match config.load_in_place(&mut flash) {
+            Ok(()) => {
                 log::info!("Loaded configuration: {config:#?}");
-                config
             }
             Err(err) => {
                 log::error!("Failed to load config: {err:?}");
-                let mut config = Configuration::default();
                 config.ssid.push_str("SECRET").ok();
                 config.wifi_pw.push_str("SECRET").ok();
+                config.ssh_pw.push_str("SECRET").ok();
                 if false {
                     // To bootstrap the config
                     match config.save(&mut flash) {
@@ -220,10 +220,16 @@ async fn main(spawner: Spawner) {
                         }
                         Err(err) => {
                             log::error!("Failed to write config: {err:?}");
+
+                            write!(SCREEN.get().lock().await, "BORK: {err:?}").ok();
+
+                            let mut ticker = Ticker::every(Duration::from_millis(5000));
+                            loop {
+                                ticker.next().await;
+                            }
                         }
                     }
                 }
-                config
             }
         }
     };
@@ -299,14 +305,7 @@ async fn main(spawner: Spawner) {
     }
 
     let wifi_control = setup_wifi(
-        &spawner,
-        p.PIN_23,
-        p.PIN_24,
-        p.PIN_25,
-        p.PIN_29,
-        p.PIO0,
-        p.DMA_CH0,
-        &wezterm_config,
+        &spawner, p.PIN_23, p.PIN_24, p.PIN_25, p.PIN_29, p.PIO0, p.DMA_CH0,
     )
     .await;
     // spawner.must_spawn(wifi_scanner(wifi_control));
@@ -321,13 +320,8 @@ async fn main(spawner: Spawner) {
 async fn screen_painter(mut display: PicoCalcDisplay<'static>) {
     // Display update takes ~128ms @ 40_000_000
     let mut ticker = Ticker::every(Duration::from_millis(200));
-    let mut last = Instant::now();
     loop {
-        log::trace!("slept {}ms", last.elapsed().as_millis());
-        last = Instant::now();
         SCREEN.get().lock().await.update_display(&mut display);
-        log::trace!("paint took {}ms", last.elapsed().as_millis());
-        last = Instant::now();
         ticker.next().await;
     }
 }
@@ -497,6 +491,7 @@ async fn ssh_session_task(stack: Stack<'static>) {
 
                     let runner = ssh_client.run(&mut read, &mut write);
                     let mut progress = ProgressHolder::new();
+                    let ssh_pw = CONFIG.get().lock().await.ssh_pw.clone();
                     let ssh_ticker = async {
                         loop {
                             match ssh_client.progress(&mut progress).await {
@@ -514,7 +509,7 @@ async fn ssh_session_task(stack: Stack<'static>) {
                                         req.username("wez").expect("set user");
                                     }
                                     CliEvent::Password(req) => {
-                                        req.password("SECRET").expect("set pw");
+                                        req.password(&ssh_pw).expect("set pw");
                                     }
                                     CliEvent::Pubkey(req) => {
                                         req.skip().expect("skip pubkey");
@@ -599,7 +594,6 @@ async fn setup_wifi(
     pin_29: embassy_rp::peripherals::PIN_29,
     pio_0: embassy_rp::peripherals::PIO0,
     dma_ch0: embassy_rp::peripherals::DMA_CH0,
-    wezterm_config: &Configuration,
 ) -> Control<'static> {
     let fw = include_bytes!("../embassy/cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../embassy/cyw43-firmware/43439A0_clm.bin");
@@ -651,18 +645,14 @@ async fn setup_wifi(
         .set_power_management(cyw43::PowerManagementMode::None)
         .await;
 
-    write!(
-        SCREEN.get().lock().await,
-        "Connecting to {}...\r\n",
-        wezterm_config.ssid,
-    )
-    .ok();
+    let (ssid, wifi_pw) = {
+        let config = CONFIG.get().lock().await;
+        (config.ssid.clone(), config.wifi_pw.clone())
+    };
+    write!(SCREEN.get().lock().await, "Connecting to {ssid}...\r\n",).ok();
     loop {
         match control
-            .join(
-                &wezterm_config.ssid,
-                cyw43::JoinOptions::new(wezterm_config.wifi_pw.as_bytes()),
-            )
+            .join(&ssid, cyw43::JoinOptions::new(wifi_pw.as_bytes()))
             .await
         {
             Ok(_) => break,
