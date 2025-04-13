@@ -1948,6 +1948,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sunset"
 version = "0.2.0"
+source = "git+https://github.com/wez/sunset.git?branch=embed_rng#40e22c94432875c9c06a1c3cb49c1fca8a25269e"
 dependencies = [
  "aes",
  "ascii",
@@ -1977,6 +1978,7 @@ dependencies = [
 [[package]]
 name = "sunset-embassy"
 version = "0.2.0"
+source = "git+https://github.com/wez/sunset.git?branch=embed_rng#40e22c94432875c9c06a1c3cb49c1fca8a25269e"
 dependencies = [
  "atomic-polyfill",
  "embassy-futures",
@@ -1990,6 +1992,7 @@ dependencies = [
 [[package]]
 name = "sunset-sshwire-derive"
 version = "0.2.0"
+source = "git+https://github.com/wez/sunset.git?branch=embed_rng#40e22c94432875c9c06a1c3cb49c1fca8a25269e"
 dependencies = [
  "virtue",
 ]

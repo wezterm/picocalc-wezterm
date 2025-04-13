@@ -43,8 +43,8 @@ serde = { version = "*", default-features = false, features = [ "derive" ] }
 serde-json-core = { version = "*" }
 sntpc = { version = "0.5.2", default-features = false, features=["embassy-socket"] }
 static_cell = { version = "*" }
-sunset-embassy = {version="0.2", default-features = false, path = "../sunset/embassy"}
-sunset = {version="0.2", default-features = false, path = "../sunset"}
+sunset-embassy = {version="0.2", default-features = false, git = "https://github.com/wez/sunset.git", branch="embed_rng"}
+sunset = {version="0.2", default-features = false, git = "https://github.com/wez/sunset.git", branch="embed_rng"}
 chrono = { version = "0.4.40", default-features = false }
 
 [profile.dev]
