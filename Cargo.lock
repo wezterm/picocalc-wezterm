@@ -164,6 +164,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono"
+version = "0.4.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a7964611d71df112cb1730f2ee67324fcf4d0fc6606acbbe9bfe06df124637c"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1359,6 +1368,7 @@ name = "picocalc-wezterm"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.9.0",
+ "chrono",
  "cortex-m-rt",
  "crc",
  "critical-section",
@@ -1394,6 +1404,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde-json-core",
+ "sntpc",
  "static_cell",
  "sunset",
  "sunset-embassy",
@@ -1891,6 +1902,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.100",
+]
+
+[[package]]
+name = "sntpc"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78f778a0f82b3cf5d75f858eceee38e84d5292f1d03415e88cc4ec45ca6ba8a2"
+dependencies = [
+ "cfg-if",
+ "embassy-net",
 ]
 
 [[package]]

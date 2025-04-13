@@ -15,7 +15,7 @@ display-interface = "0.5.0"
 embassy-embedded-hal = { version = "*" }
 embassy-executor = { version = "*", features = [ "arch-cortex-m", "executor-thread", "executor-interrupt", "nightly" ] }
 embassy-futures = { version = "*" }
-embassy-net = { version = "*", features = ["proto-ipv4", "tcp", "dhcpv4", "dns"] }
+embassy-net = { version = "*", features = ["proto-ipv4", "tcp", "udp", "dhcpv4", "dns"] }
 embassy-rp = { version = "*", features = [ "binary-info", "critical-section-impl", "unstable-pac", "time-driver", "rp235xa" ] }
 embassy-sync = { version = "*" }
 embassy-time = { version = "*" }
@@ -41,9 +41,11 @@ rand_core = { version = "0.6", default-features = false }
 rand_chacha = {version="0.3.0", default-features = false }
 serde = { version = "*", default-features = false, features = [ "derive" ] }
 serde-json-core = { version = "*" }
+sntpc = { version = "0.5.2", default-features = false, features=["embassy-socket"] }
 static_cell = { version = "*" }
 sunset-embassy = {version="0.2", default-features = false, path = "../sunset/embassy"}
 sunset = {version="0.2", default-features = false, path = "../sunset"}
+chrono = { version = "0.4.40", default-features = false }
 
 [profile.dev]
 debug = 2

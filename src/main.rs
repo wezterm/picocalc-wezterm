@@ -7,6 +7,7 @@ use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::rng::WezTermRng;
 use crate::screen::SCREEN;
+use crate::time::WezTermTimeSource;
 use core::cell::RefCell;
 use core::fmt::Write as _;
 use cyw43::Control;
@@ -63,6 +64,7 @@ mod logging;
 mod psram;
 mod rng;
 mod screen;
+mod time;
 
 const SCREEN_HEIGHT: u16 = 320;
 const SCREEN_WIDTH: u16 = 320;
@@ -269,21 +271,6 @@ async fn main(spawner: Spawner) {
     .ok();
 
     {
-        struct DummyTimesource();
-
-        impl embedded_sdmmc::TimeSource for DummyTimesource {
-            fn get_timestamp(&self) -> embedded_sdmmc::Timestamp {
-                embedded_sdmmc::Timestamp {
-                    year_since_1970: 0,
-                    zero_indexed_month: 0,
-                    zero_indexed_day: 0,
-                    hours: 0,
-                    minutes: 0,
-                    seconds: 0,
-                }
-            }
-        }
-
         let mut config = embassy_rp::spi::Config::default();
         // SPI clock needs to be running at <= 400kHz during initialization
         config.frequency = 400_000;
@@ -304,7 +291,8 @@ async fn main(spawner: Spawner) {
 
                 // Now let's look for volumes (also known as partitions) on our block device.
                 // To do this we need a Volume Manager. It will take ownership of the block device.
-                let mut volume_mgr = embedded_sdmmc::VolumeManager::new(sdcard, DummyTimesource());
+                let mut volume_mgr =
+                    embedded_sdmmc::VolumeManager::new(sdcard, WezTermTimeSource());
 
                 const MAX_VOLS: usize = 4;
                 let mut volumes = Vec::<usize, MAX_VOLS>::new();
@@ -688,6 +676,7 @@ async fn setup_wifi(
         write!(SCREEN.get().lock().await, "IP Address {}\r\n", v4.address).ok();
     }
 
+    spawner.must_spawn(crate::time::time_sync(stack));
     spawner.must_spawn(ssh_session_task(stack));
 
     control
