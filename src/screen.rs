@@ -1,4 +1,5 @@
 use crate::{PicoCalcDisplay, SCREEN_HEIGHT, SCREEN_WIDTH};
+use core::ops::{Deref, DerefMut};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex as AsyncMutex;
@@ -6,6 +7,7 @@ use embedded_graphics::mono_font::{MonoFont, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
+use vtparse::{CsiParam, VTActor, VTParser};
 
 static FONTS: &[&MonoFont] = &[
     &profont::PROFONT_7_POINT,
@@ -17,8 +19,8 @@ static FONTS: &[&MonoFont] = &[
     &profont::PROFONT_24_POINT,
 ];
 
-pub static SCREEN: LazyLock<AsyncMutex<CriticalSectionRawMutex, ScreenModel>> =
-    LazyLock::new(|| AsyncMutex::new(ScreenModel::default()));
+pub static SCREEN: LazyLock<AsyncMutex<CriticalSectionRawMutex, Screen>> =
+    LazyLock::new(|| AsyncMutex::new(Screen::new()));
 
 #[derive(Copy, Clone)]
 pub struct Line {
@@ -31,6 +33,78 @@ impl Default for Line {
     }
 }
 
+pub struct Screen {
+    model: ScreenModel,
+    vt_parser: VTParser,
+}
+
+impl Deref for Screen {
+    type Target = ScreenModel;
+    fn deref(&self) -> &ScreenModel {
+        &self.model
+    }
+}
+
+impl DerefMut for Screen {
+    fn deref_mut(&mut self) -> &mut ScreenModel {
+        &mut self.model
+    }
+}
+
+impl Screen {
+    pub fn new() -> Self {
+        Self {
+            model: ScreenModel::default(),
+            vt_parser: VTParser::new(),
+        }
+    }
+
+    pub fn parse_bytes(&mut self, bytes: &[u8]) {
+        self.vt_parser.parse(bytes, &mut self.model);
+    }
+
+    pub fn print(&mut self, text: &str) {
+        self.parse_bytes(text.as_bytes())
+    }
+}
+
+impl VTActor for ScreenModel {
+    fn print(&mut self, c: char) {
+        let ascii = if c.is_ascii() {
+            c as u32 as u8
+        } else {
+            0x20 // space
+        };
+        self.lines[self.y as usize].ascii[self.x as usize] = ascii;
+        self.x += 1;
+        if self.x >= self.width {
+            self.y += 1;
+            self.x = 0;
+            // FIXME: scroll
+        }
+    }
+
+    fn execute_c0_or_c1(&mut self, c: u8) {
+        match c {
+            b'\r' => {
+                self.x = 0;
+            }
+            b'\n' => {
+                self.y += 1;
+                // FIXME: scroll
+            }
+            _ => {}
+        }
+    }
+
+    fn dcs_hook(&mut self, _: u8, _: &[i64], _: &[u8], _: bool) {}
+    fn dcs_put(&mut self, _: u8) {}
+    fn dcs_unhook(&mut self) {}
+    fn esc_dispatch(&mut self, _: &[i64], _: &[u8], _: bool, _: u8) {}
+    fn csi_dispatch(&mut self, _: &[CsiParam], _: bool, _: u8) {}
+    fn osc_dispatch(&mut self, _: &[&[u8]]) {}
+}
+
 pub struct ScreenModel {
     pub lines: [Line; 60],
     pub x: u8,
@@ -41,7 +115,7 @@ pub struct ScreenModel {
     pub full_repaint: bool,
 }
 
-impl core::fmt::Write for ScreenModel {
+impl core::fmt::Write for Screen {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.print(s);
         Ok(())
@@ -49,38 +123,6 @@ impl core::fmt::Write for ScreenModel {
 }
 
 impl ScreenModel {
-    pub fn print_char(&mut self, c: char) {
-        match c {
-            '\r' => {
-                self.x = 0;
-            }
-            '\n' => {
-                self.y += 1;
-                // FIXME: scroll
-            }
-            _ => {
-                let ascii = if c.is_ascii() {
-                    c as u32 as u8
-                } else {
-                    0x20 // space
-                };
-                self.lines[self.y as usize].ascii[self.x as usize] = ascii;
-                self.x += 1;
-                if self.x >= self.width {
-                    self.y += 1;
-                    self.x = 0;
-                    // FIXME: scroll
-                }
-            }
-        }
-    }
-
-    pub fn print(&mut self, text: &str) {
-        for c in text.chars() {
-            self.print_char(c);
-        }
-    }
-
     pub fn increase_font(&mut self) {
         let Some(idx) = FONTS.iter().position(|&f| f == self.font) else {
             return;

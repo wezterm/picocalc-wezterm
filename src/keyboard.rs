@@ -287,7 +287,9 @@ pub async fn keyboard_reader(
                         SCREEN.get().lock().await.decrease_font();
                     }
                     Key::Char(c) => {
-                        SCREEN.get().lock().await.print_char(c);
+                        let mut bytes = [0u8; 4];
+                        let s = c.encode_utf8(&mut bytes);
+                        SCREEN.get().lock().await.print(s);
                     }
                     _ => {}
                 }
