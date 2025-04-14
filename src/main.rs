@@ -30,7 +30,7 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Delay, Duration, Ticker, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
-use embedded_io_async::{Read, Write};
+use embedded_io_async::Read;
 use embedded_sdmmc::sdcard::SdCard;
 use heapless::Vec;
 use mipidsi::Builder;
