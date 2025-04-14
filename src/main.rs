@@ -178,7 +178,7 @@ async fn main(spawner: Spawner) {
 
     // create SPI
     let mut display_config = spi::Config::default();
-    display_config.frequency = 50_000_000;
+    display_config.frequency = 62_500_000;
     display_config.phase = spi::Phase::CaptureOnSecondTransition;
     display_config.polarity = spi::Polarity::IdleHigh;
 
@@ -212,13 +212,12 @@ async fn main(spawner: Spawner) {
     // Define the display from the display interface and initialize it
     let display = Builder::new(ILI9488Rgb565, di)
         .color_order(ColorOrder::Bgr)
-        .display_size(SCREEN_WIDTH, SCREEN_HEIGHT)
         .reset_pin(rst)
         .invert_colors(ColorInversion::Inverted)
         .orientation(Orientation::new().flip_horizontal())
         .init(&mut Delay)
         .unwrap();
-    spawner.must_spawn(screen_painter(display));
+    spawner.must_spawn(crate::screen::screen_painter(display));
 
     spawner.must_spawn(crate::keyboard::keyboard_reader(i2c_bus));
 
@@ -323,16 +322,6 @@ async fn main(spawner: Spawner) {
 
     let mut ticker = Ticker::every(Duration::from_millis(100));
     loop {
-        ticker.next().await;
-    }
-}
-
-#[embassy_executor::task]
-async fn screen_painter(mut display: PicoCalcDisplay<'static>) {
-    // Display update takes ~128ms @ 40_000_000
-    let mut ticker = Ticker::every(Duration::from_millis(200));
-    loop {
-        SCREEN.get().lock().await.update_display(&mut display);
         ticker.next().await;
     }
 }
