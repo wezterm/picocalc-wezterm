@@ -4,7 +4,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Duration, Instant, Ticker};
-use embedded_graphics::mono_font::{MonoFont, MonoTextStyle};
+use embedded_graphics::mono_font::{MonoFont, MonoTextStyleBuilder};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::*;
@@ -29,23 +29,134 @@ struct LogicalY(u8);
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct PhysicalY(u8);
 
+bitflags::bitflags! {
+    #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
+    pub struct Attributes: u8 {
+        const NONE = 0;
+        const REVERSE = 1;
+        const BOLD = 2;
+        const HALF_BRIGHT = 4;
+        const UNDERLINE = 8;
+        const STRIKE_THROUGH = 16;
+    }
+}
+
+const MAX_COLS: usize = 80;
+
 #[derive(Copy, Clone)]
 pub struct Line {
-    pub ascii: [u8; 80],
+    pub ascii: [u8; MAX_COLS],
+    pub attributes: [Attributes; MAX_COLS],
     needs_paint: bool,
+}
+
+#[derive(Debug)]
+pub struct Cluster<'a> {
+    pub text: &'a str,
+    pub attributes: Attributes,
+    pub start_col: usize,
+    pub end_col: usize,
+}
+
+pub struct ClusterIter<'a> {
+    line: &'a Line,
+    last_attr: Attributes,
+    start_idx: Option<usize>,
+    attr_iter: core::iter::Peekable<core::iter::Enumerate<core::slice::Iter<'a, Attributes>>>,
+    cursor_x: Option<usize>,
+}
+
+impl<'a> ClusterIter<'a> {
+    fn take_current(&mut self, end_col: usize) -> Option<Cluster<'a>> {
+        let start_col = self.start_idx.take()?;
+
+        let byte_slice = &self.line.ascii[start_col..end_col];
+        let text = core::str::from_utf8(byte_slice).unwrap_or("");
+
+        Some(Cluster {
+            text,
+            start_col,
+            end_col,
+            attributes: self.last_attr,
+        })
+    }
+}
+
+impl<'a> Iterator for ClusterIter<'a> {
+    type Item = Cluster<'a>;
+
+    fn next(&mut self) -> Option<Cluster<'a>> {
+        loop {
+            if let Some(cursor_x) = self.cursor_x {
+                if let Some((idx, attr)) = self.attr_iter.peek() {
+                    if *idx == cursor_x {
+                        let idx = *idx;
+                        let attr = *attr;
+                        if let Some(cluster) = self.take_current(idx) {
+                            return Some(cluster);
+                        }
+
+                        // Consume the peeked cursor position
+                        self.attr_iter.next();
+
+                        // Stage an entry for the cursor, flipping it
+                        // to reverse its video attributes
+                        self.last_attr = *attr;
+                        self.last_attr.toggle(Attributes::REVERSE);
+                        self.start_idx = Some(idx);
+                    }
+                }
+            }
+
+            if let Some((idx, attr)) = self.attr_iter.next() {
+                match self.start_idx {
+                    Some(_) => {
+                        if *attr == self.last_attr {
+                            continue;
+                        }
+
+                        let cluster = self.take_current(idx);
+                        self.last_attr = *attr;
+                        self.start_idx = Some(idx);
+                        return cluster;
+                    }
+                    None => {
+                        self.start_idx = Some(idx);
+                        self.last_attr = *attr;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        self.take_current(MAX_COLS - 1)
+    }
 }
 
 impl Line {
     pub fn clear(&mut self) {
         self.ascii.fill(0x20);
+        self.attributes.fill(Attributes::NONE);
         self.needs_paint = true;
+    }
+
+    pub fn cluster<'a>(&'a self, cursor_x: Option<u8>) -> ClusterIter<'a> {
+        ClusterIter {
+            line: self,
+            last_attr: Attributes::NONE,
+            start_idx: None,
+            attr_iter: self.attributes.iter().enumerate().peekable(),
+            cursor_x: cursor_x.map(|x| x as usize),
+        }
     }
 }
 
 impl Default for Line {
     fn default() -> Line {
         Line {
-            ascii: [0x20; 80],
+            ascii: [0x20; MAX_COLS],
+            attributes: [Attributes::NONE; MAX_COLS],
             needs_paint: true,
         }
     }
@@ -102,6 +213,7 @@ impl VTActor for ScreenModel {
         if self.cursor_x >= self.width {
             self.cursor_x = 0;
             self.cursor_y.0 += 1;
+            self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
             self.check_scroll();
         }
     }
@@ -110,8 +222,10 @@ impl VTActor for ScreenModel {
         match c {
             b'\r' => {
                 self.cursor_x = 0;
+                self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
             }
             b'\n' => {
+                self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
                 self.cursor_y.0 += 1;
                 self.check_scroll();
             }
@@ -170,6 +284,7 @@ impl ScreenModel {
 
         self.pixel_offset_first_line %= 480;
         self.cursor_y = cursor_y;
+        self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
         log::info!(
             "done scroll -> y={:?}, cell_height={} height={} first_line_idx={} pixel={}",
             self.cursor_y,
@@ -244,9 +359,7 @@ impl ScreenModel {
             self.pixel_offset_first_line = 0;
         }
 
-        let style = MonoTextStyle::new(self.font, Rgb565::GREEN);
         let font = self.font;
-        let width = self.width;
 
         let pixel_offset = self.pixel_offset_first_line;
 
@@ -256,20 +369,46 @@ impl ScreenModel {
         let mut num_changed = 0;
         let mut row_y = pixel_offset as u32;
 
-        let mut draw_text = |text: &str, row_y: u32, bg_color: Rgb565| -> bool {
+        let mut draw_cluster = |cluster: &Cluster<'_>, row_y: u32| -> bool {
+            let fg_color = if cluster.attributes.contains(Attributes::HALF_BRIGHT) {
+                Rgb565::CSS_DARK_GREEN
+            } else if cluster.attributes.contains(Attributes::BOLD) {
+                Rgb565::CSS_SALMON
+            } else {
+                Rgb565::GREEN
+            };
+            let bg_color = Rgb565::BLACK;
+
+            let (fg_color, bg_color) = if cluster.attributes.contains(Attributes::REVERSE) {
+                (bg_color, fg_color)
+            } else {
+                (fg_color, bg_color)
+            };
+
+            let style = MonoTextStyleBuilder::new()
+                .font(font)
+                .text_color(fg_color)
+                .background_color(bg_color)
+                .build();
+
+            let cell_width = font.character_size.width + font.character_spacing;
+            let start_x = cluster.start_col as u32 * cell_width;
+            let end_x = cluster.end_col as u32 * cell_width;
+            let pixel_width = end_x - start_x;
+
             display
                 .fill_solid(
                     &Rectangle::new(
-                        Point::new(0, row_y as i32 % 480),
-                        Size::new(SCREEN_WIDTH as u32, font.character_size.height as u32),
+                        Point::new(start_x as i32, row_y as i32 % 480),
+                        Size::new(pixel_width, font.character_size.height as u32),
                     ),
                     bg_color,
                 )
                 .unwrap();
 
             Text::new(
-                text,
-                Point::new(0, (row_y as i32 + font.baseline as i32) % 480),
+                cluster.text,
+                Point::new(start_x as i32, (row_y as i32 + font.baseline as i32) % 480),
                 style,
             )
             .draw(display)
@@ -286,15 +425,18 @@ impl ScreenModel {
                 display
                     .fill_solid(
                         &Rectangle::new(
-                            Point::new(0, (row_y as i32 + offset) % 480),
-                            Size::new(SCREEN_WIDTH as u32, boundary_height),
+                            Point::new(start_x as i32, (row_y as i32 + offset) % 480),
+                            Size::new(pixel_width, boundary_height),
                         ),
                         bg_color,
                     )
                     .unwrap();
                 Text::new(
-                    text,
-                    Point::new(0, (row_y as i32 + font.baseline as i32 + offset) % 480),
+                    cluster.text,
+                    Point::new(
+                        start_x as i32,
+                        (row_y as i32 + font.baseline as i32 + offset) % 480,
+                    ),
                     style,
                 )
                 .draw(display)
@@ -305,6 +447,9 @@ impl ScreenModel {
                 false
             }
         };
+
+        let cursor_x = self.cursor_x;
+        let cursor_y = self.cursor_y;
 
         for idx in 0..self.height {
             let y = LogicalY(idx);
@@ -318,20 +463,27 @@ impl ScreenModel {
             line.needs_paint = false;
             num_changed += 1;
 
-            let slice = &line.ascii[0..width as usize];
-            let text = core::str::from_utf8(slice).unwrap_or("");
-
-            draw_text(text, row_y, Rgb565::BLACK);
+            for cluster in line.cluster(if y == cursor_y { Some(cursor_x) } else { None }) {
+                log::info!("line {idx} cluster {cluster:?}");
+                draw_cluster(&cluster, row_y);
+            }
 
             row_y = (row_y + font.character_size.height) % 480;
         }
 
         if num_changed > 0 {
             log::info!("clear next row @ {row_y}");
-            draw_text("", row_y, Rgb565::BLACK);
+
+            let blank_cluster = Cluster {
+                text: "",
+                start_col: 0,
+                end_col: MAX_COLS,
+                attributes: Attributes::NONE,
+            };
+            draw_cluster(&blank_cluster, row_y);
             if boundary_height > 0 {
                 log::info!("clear EXTRA row @ {}", row_y + font.character_size.height);
-                draw_text("", row_y + font.character_size.height, Rgb565::BLACK);
+                draw_cluster(&blank_cluster, row_y + font.character_size.height);
             }
 
             log::info!(
