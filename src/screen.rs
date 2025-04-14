@@ -94,14 +94,14 @@ impl VTActor for ScreenModel {
             0x20 // space
         };
 
-        let x = self.x as usize;
-        let line = self.line_log_mut(self.y).unwrap();
+        let cursor_x = self.cursor_x as usize;
+        let line = self.line_log_mut(self.cursor_y).unwrap();
         line.needs_paint = true;
-        line.ascii[x] = ascii;
-        self.x += 1;
-        if self.x >= self.width {
-            self.x = 0;
-            self.y.0 += 1;
+        line.ascii[cursor_x] = ascii;
+        self.cursor_x += 1;
+        if self.cursor_x >= self.width {
+            self.cursor_x = 0;
+            self.cursor_y.0 += 1;
             self.check_scroll();
         }
     }
@@ -109,10 +109,10 @@ impl VTActor for ScreenModel {
     fn execute_c0_or_c1(&mut self, c: u8) {
         match c {
             b'\r' => {
-                self.x = 0;
+                self.cursor_x = 0;
             }
             b'\n' => {
-                self.y.0 += 1;
+                self.cursor_y.0 += 1;
                 self.check_scroll();
             }
             _ => {}
@@ -132,8 +132,8 @@ const MAX_LINES: usize = 60;
 pub struct ScreenModel {
     lines: [Line; MAX_LINES],
     /// cursor x,y in logical coordinates
-    x: u8,
-    y: LogicalY,
+    cursor_x: u8,
+    cursor_y: LogicalY,
     pub width: u8,
     pub height: u8,
     font: &'static MonoFont<'static>,
@@ -155,24 +155,24 @@ impl ScreenModel {
     fn check_scroll(&mut self) {
         log::info!(
             "consider scroll, y={:?}, height={} first_line_idx={} pixel={}",
-            self.y,
+            self.cursor_y,
             self.height,
             self.first_line_idx,
             self.pixel_offset_first_line,
         );
-        let mut y = self.y;
-        while y.0 >= self.height {
-            self.line_log_mut(y).unwrap().clear();
+        let mut cursor_y = self.cursor_y;
+        while cursor_y.0 >= self.height {
+            self.line_log_mut(cursor_y).unwrap().clear();
             self.first_line_idx += 1;
             self.pixel_offset_first_line += self.font.character_size.height as u16;
-            y.0 -= 1;
+            cursor_y.0 -= 1;
         }
 
         self.pixel_offset_first_line %= 480;
-        self.y = y;
+        self.cursor_y = cursor_y;
         log::info!(
             "done scroll -> y={:?}, cell_height={} height={} first_line_idx={} pixel={}",
-            self.y,
+            self.cursor_y,
             self.font.character_size.height,
             self.height,
             self.first_line_idx,
@@ -349,8 +349,8 @@ impl Default for ScreenModel {
     fn default() -> ScreenModel {
         let font = FONTS[2];
         ScreenModel {
-            x: 0,
-            y: LogicalY(0),
+            cursor_x: 0,
+            cursor_y: LogicalY(0),
             width: ((SCREEN_WIDTH as u32) / (font.character_size.width + font.character_spacing))
                 as u8,
             height: ((SCREEN_HEIGHT as u32) / font.character_size.height) as u8,
