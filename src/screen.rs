@@ -206,9 +206,11 @@ impl VTActor for ScreenModel {
         };
 
         let cursor_x = self.cursor_x as usize;
+        let attributes = self.current_attributes;
         let line = self.line_log_mut(self.cursor_y).unwrap();
         line.needs_paint = true;
         line.ascii[cursor_x] = ascii;
+        line.attributes[cursor_x] = attributes;
         self.cursor_x += 1;
         if self.cursor_x >= self.width {
             self.cursor_x = 0;
@@ -248,6 +250,7 @@ pub struct ScreenModel {
     /// cursor x,y in logical coordinates
     cursor_x: u8,
     cursor_y: LogicalY,
+    current_attributes: Attributes,
     pub width: u8,
     pub height: u8,
     font: &'static MonoFont<'static>,
@@ -266,6 +269,10 @@ impl core::fmt::Write for Screen {
 }
 
 impl ScreenModel {
+    pub fn set_attributes(&mut self, attributes: Attributes) {
+        self.current_attributes = attributes;
+    }
+
     fn check_scroll(&mut self) {
         log::info!(
             "consider scroll, y={:?}, height={} first_line_idx={} pixel={}",
@@ -512,6 +519,7 @@ impl Default for ScreenModel {
             full_repaint: true,
             first_line_idx: 0,
             pixel_offset_first_line: 0,
+            current_attributes: Attributes::NONE,
         }
     }
 }

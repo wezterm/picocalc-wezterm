@@ -6,7 +6,7 @@ use crate::config::{CONFIG, Flash};
 use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::rng::WezTermRng;
-use crate::screen::SCREEN;
+use crate::screen::{Attributes, SCREEN};
 use crate::time::WezTermTimeSource;
 use core::cell::RefCell;
 use core::fmt::Write as _;
@@ -150,12 +150,12 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    write!(
-        SCREEN.get().lock().await,
-        "WezTerm {}\r\n",
-        env!("CARGO_PKG_VERSION")
-    )
-    .ok();
+    {
+        let mut screen = SCREEN.get().lock().await;
+        screen.set_attributes(Attributes::BOLD);
+        write!(screen, "WezTerm {}\r\n", env!("CARGO_PKG_VERSION")).ok();
+        screen.set_attributes(Attributes::NONE);
+    }
     if let Some(msg) = panic_persist::get_panic_message_utf8() {
         log::error!("prior panic: {msg}");
         write!(SCREEN.get().lock().await, "Panic: {msg}\r\n").ok();
