@@ -243,7 +243,8 @@ pub async fn keyboard_reader(
         }
     }
 
-    let mut kbd_ticker = Ticker::every(Duration::from_millis(50));
+    // The keyboard MCU polls every 16ms, so let's match that
+    let mut kbd_ticker = Ticker::every(Duration::from_millis(16));
     loop {
         kbd_ticker.next().await;
         if let Some(key) = keyboard.process(&mut i2c_bus).await {
