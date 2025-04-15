@@ -68,6 +68,7 @@ mod time;
 
 const SCREEN_HEIGHT: u16 = 320;
 const SCREEN_WIDTH: u16 = 320;
+const MAX_SPI_FREQ: u32 = 62_500_000;
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -178,7 +179,7 @@ async fn main(spawner: Spawner) {
 
     // create SPI
     let mut display_config = spi::Config::default();
-    display_config.frequency = 62_500_000;
+    display_config.frequency = MAX_SPI_FREQ;
     display_config.phase = spi::Phase::CaptureOnSecondTransition;
     display_config.polarity = spi::Polarity::IdleHigh;
 
@@ -294,7 +295,7 @@ async fn main(spawner: Spawner) {
                 log::info!("Card size is {size} bytes");
                 // Now that the card is initialized, the SPI clock can go faster
                 let mut config = spi::Config::default();
-                config.frequency = 16_000_000;
+                config.frequency = MAX_SPI_FREQ;
                 sdcard
                     .spi(|dev| SetConfig::set_config(dev.bus_mut(), &config))
                     .ok();
