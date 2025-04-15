@@ -21,6 +21,7 @@ embassy-sync = { version = "*" }
 embassy-time = { version = "*" }
 embassy-usb = { version = "*" }
 embassy-usb-logger = { version = "*" }
+embedded-alloc = "0.6"
 embedded-graphics = "0.8.1"
 embedded-graphics-core = "0.4.0"
 embedded-hal-bus = "0.3.0"

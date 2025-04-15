@@ -1,4 +1,6 @@
-use crate::{Irqs, SCREEN};
+use crate::Irqs;
+use crate::keyboard::{Key, KeyReport, KeyState, Modifiers};
+use crate::process::{Process, SHELL};
 use core::fmt::Write as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
@@ -148,9 +150,34 @@ async fn uart_reader(mut rx: BufferedUartRx<'static, UART0>) {
     loop {
         let mut buf = [0; 31];
         if let Ok(n) = rx.read(&mut buf).await {
-            if let Ok(s) = core::str::from_utf8(&buf[0..n]) {
-                write!(SCREEN.get().lock().await, "UART RX: {s}\r\n").ok();
+            let shell = SHELL.get();
+            match core::str::from_utf8(&buf[0..n]) {
+                Ok(s) => {
+                    for c in s.chars() {
+                        if c == '\r' {
+                            continue;
+                        }
+                        log::info!("UART: char {c:?}");
+                        shell
+                            .key_input(KeyReport {
+                                state: KeyState::Pressed,
+                                key: match c {
+                                    '\n' => Key::Enter,
+                                    '\u{7f}' => Key::BackSpace,
+                                    '\t' => Key::Tab,
+                                    '\u{1b}' => Key::Escape,
+                                    c => Key::Char(c),
+                                },
+                                modifiers: Modifiers::NONE,
+                            })
+                            .await;
+                    }
+                }
+                Err(e) => {
+                    log::info!("not utf8: {e:?} {:x?}", &buf[0..n]);
+                }
             }
+            shell.render().await;
         }
     }
 }

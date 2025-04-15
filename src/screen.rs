@@ -231,16 +231,51 @@ impl VTActor for ScreenModel {
                 self.cursor_y.0 += 1;
                 self.check_scroll();
             }
-            _ => {}
+            unhandled => {
+                log::info!("c0/c1: unhandled {unhandled}");
+            }
         }
     }
 
     fn dcs_hook(&mut self, _: u8, _: &[i64], _: &[u8], _: bool) {}
     fn dcs_put(&mut self, _: u8) {}
     fn dcs_unhook(&mut self) {}
-    fn esc_dispatch(&mut self, _: &[i64], _: &[u8], _: bool, _: u8) {}
-    fn csi_dispatch(&mut self, _: &[CsiParam], _: bool, _: u8) {}
-    fn osc_dispatch(&mut self, _: &[&[u8]]) {}
+    fn esc_dispatch(
+        &mut self,
+        params: &[i64],
+        intermediates: &[u8],
+        ignored_excess_intermediates: bool,
+        byte: u8,
+    ) {
+        log::info!(
+            "esc: {params:?} intermediates={intermediates:?} ign={ignored_excess_intermediates} byte={byte}"
+        );
+    }
+    fn csi_dispatch(&mut self, params: &[CsiParam], truncated: bool, byte: u8) {
+        log::info!("csi: {params:?} truncated={truncated} byte={byte}");
+        match byte {
+            b'K' => {
+                // FIXME: just doing basic clear to end of line here
+                let x = self.cursor_x;
+                let current_attributes = self.current_attributes;
+                let line = self.line_log_mut(self.cursor_y).unwrap();
+                for (ascii, attr) in line
+                    .ascii
+                    .iter_mut()
+                    .zip(line.attributes.iter_mut())
+                    .skip(x as usize)
+                {
+                    *ascii = 0x20;
+                    *attr = current_attributes;
+                }
+                line.needs_paint = true;
+            }
+            _ => {}
+        }
+    }
+    fn osc_dispatch(&mut self, params: &[&[u8]]) {
+        log::info!("osc: {params:?}");
+    }
 }
 
 const MAX_LINES: usize = 60;

@@ -3,6 +3,7 @@
 #![no_main]
 
 use crate::config::{CONFIG, Flash};
+use crate::heap::HEAP;
 use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::rng::WezTermRng;
@@ -59,8 +60,10 @@ type PicoCalcDisplay<'a> = mipidsi::Display<
 >;
 
 mod config;
+mod heap;
 mod keyboard;
 mod logging;
+mod process;
 mod psram;
 mod rng;
 mod screen;
@@ -141,6 +144,7 @@ fn get_max_usable_stack() -> usize {
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
+    crate::heap::init_heap();
 
     crate::logging::setup_logging(
         &spawner,
@@ -158,8 +162,16 @@ async fn main(spawner: Spawner) {
         screen.set_attributes(Attributes::NONE);
     }
     if let Some(msg) = panic_persist::get_panic_message_utf8() {
+        // Give serial a chance to be ready to capture this info
+        Timer::after(Duration::from_millis(100)).await;
         log::error!("prior panic: {msg}");
-        write!(SCREEN.get().lock().await, "Panic: {msg}\r\n").ok();
+        let mut screen = SCREEN.get().lock().await;
+        screen.set_attributes(Attributes::BOLD);
+        write!(screen, "Panic: ").ok();
+        for chunk in msg.lines() {
+            write!(screen, "{chunk}\r\n").ok();
+        }
+        screen.set_attributes(Attributes::NONE);
     }
     spawner.must_spawn(watchdog_task(Watchdog::new(p.WATCHDOG)));
     crate::rng::init_rng(p.TRNG);
@@ -279,6 +291,13 @@ async fn main(spawner: Spawner) {
             write!(screen, "External PSRAM was NOT found!\r\n").ok();
             screen.set_attributes(Attributes::NONE);
         }
+        write!(
+            screen,
+            "Heap {} used, {} free\r\n",
+            byte_size(HEAP.used()),
+            byte_size(HEAP.free()),
+        )
+        .ok();
     }
 
     {

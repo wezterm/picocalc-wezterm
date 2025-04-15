@@ -1,3 +1,4 @@
+use crate::process::{Process, SHELL};
 use crate::screen::SCREEN;
 use embassy_rp::i2c::I2c;
 use embassy_rp::peripherals::I2C1;
@@ -278,21 +279,17 @@ pub async fn keyboard_reader(
                         );
                         loop {}
                     }
-                    Key::Enter => {
-                        SCREEN.get().lock().await.print("\r\n");
-                    }
                     Key::Char('=') if key.modifiers == Modifiers::CTRL => {
                         SCREEN.get().lock().await.increase_font();
                     }
                     Key::Char('-') if key.modifiers == Modifiers::CTRL => {
                         SCREEN.get().lock().await.decrease_font();
                     }
-                    Key::Char(c) => {
-                        let mut bytes = [0u8; 4];
-                        let s = c.encode_utf8(&mut bytes);
-                        SCREEN.get().lock().await.print(s);
+                    _ => {
+                        let shell = SHELL.get();
+                        shell.key_input(key).await;
+                        shell.render().await;
                     }
-                    _ => {}
                 }
             }
         }
