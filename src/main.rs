@@ -261,13 +261,24 @@ async fn main(spawner: Spawner) {
         p.PIO1, p.PIN_21, p.PIN_2, p.PIN_3, p.PIN_20, p.DMA_CH1, p.DMA_CH2,
     )
     .await;
-    write!(
-        SCREEN.get().lock().await,
-        "RAM {} avail of 512KiB. PSRAM {}\r\n",
-        byte_size(get_max_usable_stack()),
-        byte_size(psram.size),
-    )
-    .ok();
+
+    {
+        let mut screen = SCREEN.get().lock().await;
+        write!(
+            screen,
+            "RAM {} avail of 512KiB. PSRAM {}\r\n",
+            byte_size(get_max_usable_stack()),
+            byte_size(psram.size),
+        )
+        .ok();
+        if psram.size == 0 {
+            screen.set_attributes(Attributes::BOLD);
+            // This can happen if you power on the pico without first
+            // powering up the picocalc carrier board
+            write!(screen, "External PSRAM was NOT found!\r\n").ok();
+            screen.set_attributes(Attributes::NONE);
+        }
+    }
 
     {
         let mut config = embassy_rp::spi::Config::default();
