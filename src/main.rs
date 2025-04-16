@@ -44,6 +44,25 @@ use static_cell::StaticCell;
 use sunset::{CliEvent, SessionCommand};
 use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
 
+macro_rules! print {
+    ($($args:tt)+) => {
+        {
+        use crate::process::SHELL;
+        use crate::process::Process;
+        {
+            let mut screen = SCREEN.get().lock().await;
+            // Erase whatever prompt may have been printed
+            write!(screen, "\r\u{1b}[K").ok();
+            // write our text
+            write!(screen, $($args)+).ok();
+        }
+        // Get the shell to render its prompt again
+        SHELL.get().render().await;
+        Timer::after(Duration::from_millis(100)).await;
+        }
+    }
+}
+
 type PicoCalcDisplay<'a> = mipidsi::Display<
     SpiInterface<
         'a,
@@ -155,12 +174,11 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    {
-        let mut screen = SCREEN.get().lock().await;
-        screen.set_attributes(Attributes::BOLD);
-        write!(screen, "WezTerm {}\r\n", env!("CARGO_PKG_VERSION")).ok();
-        screen.set_attributes(Attributes::NONE);
-    }
+    print!(
+        "\u{1b}[1mWezTerm {}\u{1b}[0m\r\n",
+        env!("CARGO_PKG_VERSION")
+    );
+
     if let Some(msg) = panic_persist::get_panic_message_utf8() {
         // Give serial a chance to be ready to capture this info
         Timer::after(Duration::from_millis(100)).await;
@@ -257,7 +275,7 @@ async fn main(spawner: Spawner) {
                         Err(err) => {
                             log::error!("Failed to write config: {err:?}");
 
-                            write!(SCREEN.get().lock().await, "BORK: {err:?}").ok();
+                            print!("BORK: {err:?}");
 
                             let mut ticker = Ticker::every(Duration::from_millis(5000));
                             loop {
@@ -276,28 +294,21 @@ async fn main(spawner: Spawner) {
     .await;
 
     {
-        let mut screen = SCREEN.get().lock().await;
-        write!(
-            screen,
+        print!(
             "RAM {} avail of 512KiB. PSRAM {}\r\n",
             byte_size(get_max_usable_stack()),
             byte_size(psram.size),
-        )
-        .ok();
+        );
         if psram.size == 0 {
-            screen.set_attributes(Attributes::BOLD);
             // This can happen if you power on the pico without first
             // powering up the picocalc carrier board
-            write!(screen, "External PSRAM was NOT found!\r\n").ok();
-            screen.set_attributes(Attributes::NONE);
+            print!("\u{1b}[1mExternal PSRAM was NOT found!\u{1b}[0m\r\n");
         }
-        write!(
-            screen,
+        print!(
             "Heap {} used, {} free\r\n",
             byte_size(HEAP.used()),
             byte_size(HEAP.free()),
-        )
-        .ok();
+        );
     }
 
     {
@@ -314,7 +325,7 @@ async fn main(spawner: Spawner) {
                 log::info!("Card size is {size} bytes");
                 // Now that the card is initialized, the SPI clock can go faster
                 let mut config = spi::Config::default();
-                config.frequency = MAX_SPI_FREQ;
+                config.frequency = 16_000_000;
                 sdcard
                     .spi(|dev| SetConfig::set_config(dev.bus_mut(), &config))
                     .ok();
@@ -332,15 +343,10 @@ async fn main(spawner: Spawner) {
                         volumes.push(idx).ok();
                     }
                 }
-                write!(
-                    SCREEN.get().lock().await,
-                    "SD card {}, volumes {volumes:?}\r\n",
-                    byte_size(size),
-                )
-                .ok();
+                print!("SD card {}, volumes {volumes:?}\r\n", byte_size(size),);
             }
             Err(err) => {
-                log::error!("SD Card error: {err:?}");
+                print!("\u{1b}[1mSD Card error: {err:?}\u{1b}[0m\r\n",);
             }
         }
     }
@@ -669,7 +675,7 @@ async fn setup_wifi(
         let config = CONFIG.get().lock().await;
         (config.ssid.clone(), config.wifi_pw.clone())
     };
-    write!(SCREEN.get().lock().await, "Connecting to {ssid}...\r\n",).ok();
+    print!("Connecting to \u{1b}[1m{ssid}\u{1b}[0m...\r\n");
     loop {
         match control
             .join(&ssid, cyw43::JoinOptions::new(wifi_pw.as_bytes()))
@@ -678,12 +684,7 @@ async fn setup_wifi(
             Ok(_) => break,
             Err(err) => {
                 log::error!("join failed with status={}", err.status);
-                write!(
-                    SCREEN.get().lock().await,
-                    "Failed with status {}\r\n",
-                    err.status
-                )
-                .ok();
+                print!("Failed with status {}\r\n", err.status);
             }
         }
     }
@@ -693,11 +694,11 @@ async fn setup_wifi(
     log::info!("Stack is up!");
     if let Some(v4) = stack.config_v4() {
         log::info!("{v4:?}");
-        write!(SCREEN.get().lock().await, "IP Address {}\r\n", v4.address).ok();
+        print!("IP Address {}\r\n", v4.address);
     }
 
     spawner.must_spawn(crate::time::time_sync(stack));
-    spawner.must_spawn(ssh_session_task(stack));
+    // spawner.must_spawn(ssh_session_task(stack));
 
     control
 }

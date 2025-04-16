@@ -222,7 +222,7 @@ pub async fn time_sync(stack: Stack<'static>) {
                         let offset = Duration::from_micros(time.offset.abs() as u64);
                         if first {
                             first = false;
-                            write!(SCREEN.get().lock().await, "The time is {rfc3339}\r\n",).ok();
+                            print!("The time is {rfc3339}\r\n");
                         }
 
                         log::info!("{rfc3339} drift={}us", offset.as_micros());

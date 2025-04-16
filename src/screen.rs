@@ -270,6 +270,44 @@ impl VTActor for ScreenModel {
                 }
                 line.needs_paint = true;
             }
+            b'm' => {
+                log::info!("SGR!");
+                for p in params {
+                    match p {
+                        CsiParam::Integer(0) => {
+                            // Reset all to normal
+                            self.current_attributes = Attributes::NONE;
+                        }
+                        CsiParam::Integer(1) => {
+                            self.current_attributes.set(Attributes::BOLD, true);
+                            self.current_attributes.set(Attributes::HALF_BRIGHT, false);
+                        }
+                        CsiParam::Integer(2) => {
+                            self.current_attributes.set(Attributes::BOLD, false);
+                            self.current_attributes.set(Attributes::HALF_BRIGHT, true);
+                        }
+                        CsiParam::Integer(4) => {
+                            self.current_attributes.set(Attributes::UNDERLINE, true);
+                        }
+                        CsiParam::Integer(9) => {
+                            self.current_attributes.set(Attributes::STRIKE_THROUGH, true);
+                        }
+                        CsiParam::Integer(22) => {
+                            self.current_attributes.set(Attributes::BOLD, false);
+                            self.current_attributes.set(Attributes::HALF_BRIGHT, false);
+                        }
+                        CsiParam::Integer(24) => {
+                            self.current_attributes.set(Attributes::UNDERLINE, false);
+                        }
+                        CsiParam::Integer(29) => {
+                            self.current_attributes.set(Attributes::STRIKE_THROUGH, false);
+                        }
+                        _ => {
+                            log::info!("CSI SGR {p:?} not handled");
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -309,7 +347,7 @@ impl ScreenModel {
     }
 
     fn check_scroll(&mut self) {
-        log::info!(
+        log::trace!(
             "consider scroll, y={:?}, height={} first_line_idx={} pixel={}",
             self.cursor_y,
             self.height,
@@ -327,7 +365,7 @@ impl ScreenModel {
         self.pixel_offset_first_line %= 480;
         self.cursor_y = cursor_y;
         self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
-        log::info!(
+        log::trace!(
             "done scroll -> y={:?}, cell_height={} height={} first_line_idx={} pixel={}",
             self.cursor_y,
             self.font.character_size.height,
@@ -506,7 +544,7 @@ impl ScreenModel {
             num_changed += 1;
 
             for cluster in line.cluster(if y == cursor_y { Some(cursor_x) } else { None }) {
-                log::info!("line {idx} cluster {cluster:?}");
+                //log::info!("line {idx} cluster {cluster:?}");
                 draw_cluster(&cluster, row_y);
             }
 
@@ -514,7 +552,7 @@ impl ScreenModel {
         }
 
         if num_changed > 0 {
-            log::info!("clear next row @ {row_y}");
+            //log::info!("clear next row @ {row_y}");
 
             let blank_cluster = Cluster {
                 text: "",
@@ -524,11 +562,11 @@ impl ScreenModel {
             };
             draw_cluster(&blank_cluster, row_y);
             if boundary_height > 0 {
-                log::info!("clear EXTRA row @ {}", row_y + font.character_size.height);
+                //log::info!("clear EXTRA row @ {}", row_y + font.character_size.height);
                 draw_cluster(&blank_cluster, row_y + font.character_size.height);
             }
 
-            log::info!(
+            log::trace!(
                 "render of {num_changed} lines took {}ms. boundary_y={boundary_y} h={boundary_height} baseline={} pixel_offset={pixel_offset}",
                 start.elapsed().as_millis(),
                 font.baseline
