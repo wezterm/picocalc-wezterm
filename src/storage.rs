@@ -9,7 +9,7 @@ use embassy_rp::peripherals::{PIN_16, PIN_17, PIN_18, PIN_19, PIN_22, SPI0};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Delay, Duration, Timer};
+use embassy_time::Delay;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use embedded_sdmmc::{DirEntry, SdCard, VolumeIdx, VolumeManager};
 

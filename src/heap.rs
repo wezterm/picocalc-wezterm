@@ -120,3 +120,26 @@ pub fn init_heap() {
     let secondary_start = &raw mut HEAP_TWO as usize;
     unsafe { HEAP.add_secondary(Region::new(secondary_start, 1024)) }
 }
+
+pub async fn free_command(_ignored: &str) {
+    print!(
+        "{:<10} {:>10} {:>10} {:>10}\r\n",
+        "", "TOTAL", "USED", "FREE"
+    );
+
+    let ram_used = HEAP.primary.used();
+    let ram_free = HEAP.primary.free();
+    let ram_total = ram_used + ram_free;
+    print!(
+        "{:<10} {ram_total:>10} {ram_used:>10} {ram_free:>10}\r\n",
+        "RAM"
+    );
+
+    let xip_used = HEAP.secondary.used();
+    let xip_free = HEAP.secondary.free();
+    let xip_total = xip_used + xip_free;
+    print!(
+        "{:<10} {xip_total:>10} {xip_used:>10} {xip_free:>10}\r\n",
+        "XIP"
+    );
+}

@@ -1,5 +1,4 @@
 use chrono::{DateTime, Datelike, Timelike, Utc};
-use core::fmt::Write;
 use core::net::{IpAddr, SocketAddr};
 use embassy_net::Stack;
 use embassy_net::dns::DnsQueryType;

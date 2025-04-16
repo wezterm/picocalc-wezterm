@@ -40,6 +40,7 @@ impl LocalShell {
         let (arg0, args) = command.split_once(' ').unwrap_or((command, ""));
         match arg0 {
             "ls" => ls_command(args).await,
+            "free" => crate::heap::free_command(args).await,
             _ => {
                 let mut screen = SCREEN.get().lock().await;
                 write!(screen, "Unknown command: {arg0}\r\n").ok();

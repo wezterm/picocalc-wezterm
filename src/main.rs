@@ -46,6 +46,9 @@ macro_rules! print {
             use crate::process::SHELL;
             use crate::process::Process;
             use crate::screen::SCREEN;
+            use core::fmt::Write;
+            use embassy_time::Duration;
+            use embassy_time::Timer;
             {
                 let mut screen = SCREEN.get().lock().await;
                 // Erase whatever prompt may have been printed
