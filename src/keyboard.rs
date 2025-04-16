@@ -1,4 +1,4 @@
-use crate::process::{Process, SHELL};
+use crate::process::SHELL;
 use crate::screen::SCREEN;
 use embassy_rp::i2c::I2c;
 use embassy_rp::peripherals::I2C1;

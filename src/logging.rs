@@ -1,6 +1,6 @@
 use crate::Irqs;
 use crate::keyboard::{Key, KeyReport, KeyState, Modifiers};
-use crate::process::{Process, SHELL};
+use crate::process::SHELL;
 use core::fmt::Write as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;

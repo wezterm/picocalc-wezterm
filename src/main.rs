@@ -43,21 +43,21 @@ use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
 macro_rules! print {
     ($($args:tt)+) => {
         {
-            use crate::process::SHELL;
-            use crate::process::Process;
             use crate::screen::SCREEN;
             use core::fmt::Write;
             use embassy_time::Duration;
             use embassy_time::Timer;
+            use crate::process::current_proc;
+            let proc = current_proc();
             {
                 let mut screen = SCREEN.get().lock().await;
                 // Erase whatever prompt may have been printed
-                write!(screen, "\r\u{1b}[K").ok();
+                proc.un_prompt(&mut screen);
                 // write our text
                 write!(screen, $($args)+).ok();
             }
             // Get the shell to render its prompt again
-            SHELL.get().render().await;
+            proc.render().await;
             Timer::after(Duration::from_millis(5)).await;
         }
     }

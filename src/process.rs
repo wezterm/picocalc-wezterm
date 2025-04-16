@@ -1,26 +1,35 @@
 use crate::SCREEN;
 use crate::keyboard::{Key, KeyReport, KeyState};
+use crate::screen::Screen;
 use crate::storage::ls_command;
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use embassy_sync::blocking_mutex::CriticalSectionMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
 extern crate alloc;
 
 pub type Mutex<T> = embassy_sync::mutex::Mutex<CriticalSectionRawMutex, T>;
-pub type ProcHandle = Arc<&'static dyn Process>;
+pub type ProcHandle = Arc<dyn Process + Send + Sync>;
 
-pub static SHELL: LazyLock<Arc<LocalShell>> = LazyLock::new(LocalShell::new);
+pub static SHELL: LazyLock<ProcHandle> = LazyLock::new(LocalShell::new);
+static CURRENT: LazyLock<CriticalSectionMutex<Arc<dyn Process + Send + Sync>>> =
+    LazyLock::new(|| CriticalSectionMutex::new(Arc::clone(SHELL.get())));
 
+pub fn current_proc() -> ProcHandle {
+    CURRENT.get().lock(Arc::clone)
+}
+
+#[async_trait::async_trait]
 pub trait Process {
-    async fn key_input(&self, key: KeyReport)
-    where
-        Self: Sized;
-    async fn render(&self)
-    where
-        Self: Sized;
+    async fn key_input(&self, key: KeyReport);
+    async fn render(&self);
+
+    // Erase whatever prompt may have been printed
+    fn un_prompt(&self, _screen: &mut Screen) {}
 }
 
 pub struct LocalShell {
@@ -29,7 +38,7 @@ pub struct LocalShell {
 }
 
 impl LocalShell {
-    pub fn new() -> Arc<Self> {
+    pub fn new() -> ProcHandle {
         Arc::new(Self {
             command: Mutex::new(String::new()),
             cursor_x: AtomicUsize::new(0),
@@ -50,11 +59,16 @@ impl LocalShell {
     }
 }
 
+#[async_trait::async_trait]
 impl Process for LocalShell {
     async fn render(&self) {
         let mut screen = SCREEN.get().lock().await;
         let command = self.command.lock().await;
         write!(screen, "\r$ {}\u{1b}[K", command.as_str()).ok();
+    }
+
+    fn un_prompt(&self, screen: &mut Screen) {
+        write!(screen, "\r\u{1b}[K").ok();
     }
 
     async fn key_input(&self, key: KeyReport) {

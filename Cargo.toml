@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 # panic-probe = { version = "*" }
+async-trait = "0.1.88"
 bitflags = { version="2.9.0", default-features=false }
 cortex-m-rt = { version = "*" }
 crc = "3.2.1"
@@ -30,7 +31,6 @@ embedded-io = "0.6"
 embedded-io-async = "0.6"
 embedded-sdmmc = "0.8"
 fixed = { version = "*" }
-fixed-macro = { version = "*" }
 getrandom = { version="0.2", features=["custom"] }
 heapless = "0.8"
 humansize = {version="2.1.3", features=["no_alloc"]}
