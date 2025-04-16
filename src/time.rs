@@ -1,4 +1,3 @@
-use crate::SCREEN;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use core::fmt::Write;
 use core::net::{IpAddr, SocketAddr};

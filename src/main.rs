@@ -8,12 +8,11 @@ use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::rng::WezTermRng;
 use crate::screen::SCREEN;
-use crate::time::WezTermTimeSource;
+use crate::storage::init_storage;
 use core::cell::RefCell;
 use core::fmt::Write as _;
 use cyw43::Control;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use embassy_embedded_hal::SetConfig;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_net::dns::{DnsQueryType, DnsSocket};
@@ -30,10 +29,7 @@ use embassy_rp::{bind_interrupts, spi, usb};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Delay, Duration, Ticker, Timer};
-use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_io_async::Read;
-use embedded_sdmmc::sdcard::SdCard;
-use heapless::Vec;
 use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9488Rgb565;
@@ -47,18 +43,19 @@ use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
 macro_rules! print {
     ($($args:tt)+) => {
         {
-        use crate::process::SHELL;
-        use crate::process::Process;
-        {
-            let mut screen = SCREEN.get().lock().await;
-            // Erase whatever prompt may have been printed
-            write!(screen, "\r\u{1b}[K").ok();
-            // write our text
-            write!(screen, $($args)+).ok();
-        }
-        // Get the shell to render its prompt again
-        SHELL.get().render().await;
-        Timer::after(Duration::from_millis(100)).await;
+            use crate::process::SHELL;
+            use crate::process::Process;
+            use crate::screen::SCREEN;
+            {
+                let mut screen = SCREEN.get().lock().await;
+                // Erase whatever prompt may have been printed
+                write!(screen, "\r\u{1b}[K").ok();
+                // write our text
+                write!(screen, $($args)+).ok();
+            }
+            // Get the shell to render its prompt again
+            SHELL.get().render().await;
+            Timer::after(Duration::from_millis(5)).await;
         }
     }
 }
@@ -86,6 +83,7 @@ mod process;
 mod psram;
 mod rng;
 mod screen;
+mod storage;
 mod time;
 
 const SCREEN_HEIGHT: u16 = 320;
@@ -310,45 +308,7 @@ async fn main(spawner: Spawner) {
         );
     }
 
-    {
-        let mut config = embassy_rp::spi::Config::default();
-        // SPI clock needs to be running at <= 400kHz during initialization
-        config.frequency = 400_000;
-        let spi = embassy_rp::spi::Spi::new_blocking(p.SPI0, p.PIN_18, p.PIN_19, p.PIN_16, config);
-        let cs = Output::new(p.PIN_17, Level::High);
-        let spi_dev = ExclusiveDevice::new_no_delay(spi, cs).unwrap();
-
-        let sdcard = SdCard::new(spi_dev, embassy_time::Delay);
-        match sdcard.num_bytes() {
-            Ok(size) => {
-                log::info!("Card size is {size} bytes");
-                // Now that the card is initialized, the SPI clock can go faster
-                let mut config = spi::Config::default();
-                config.frequency = 16_000_000;
-                sdcard
-                    .spi(|dev| SetConfig::set_config(dev.bus_mut(), &config))
-                    .ok();
-
-                // Now let's look for volumes (also known as partitions) on our block device.
-                // To do this we need a Volume Manager. It will take ownership of the block device.
-                let mut volume_mgr =
-                    embedded_sdmmc::VolumeManager::new(sdcard, WezTermTimeSource());
-
-                const MAX_VOLS: usize = 4;
-                let mut volumes = Vec::<usize, MAX_VOLS>::new();
-                for idx in 0..=MAX_VOLS {
-                    if let Ok(vol) = volume_mgr.open_volume(embedded_sdmmc::VolumeIdx(idx)) {
-                        log::info!("Volume {idx}: {vol:?}");
-                        volumes.push(idx).ok();
-                    }
-                }
-                print!("SD card {}, volumes {volumes:?}\r\n", byte_size(size),);
-            }
-            Err(err) => {
-                print!("\u{1b}[1mSD Card error: {err:?}\u{1b}[0m\r\n",);
-            }
-        }
-    }
+    init_storage(p.PIN_16, p.PIN_17, p.PIN_18, p.PIN_19, p.PIN_22, p.SPI0).await;
 
     let wifi_control = setup_wifi(
         &spawner, p.PIN_23, p.PIN_24, p.PIN_25, p.PIN_29, p.PIO0, p.DMA_CH0,

@@ -1,5 +1,6 @@
 use crate::SCREEN;
 use crate::keyboard::{Key, KeyReport, KeyState};
+use crate::storage::ls_command;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt::Write;
@@ -34,6 +35,17 @@ impl LocalShell {
             cursor_x: AtomicUsize::new(0),
         })
     }
+
+    async fn dispatch_command(&self, command: &str) {
+        let (arg0, args) = command.split_once(' ').unwrap_or((command, ""));
+        match arg0 {
+            "ls" => ls_command(args).await,
+            _ => {
+                let mut screen = SCREEN.get().lock().await;
+                write!(screen, "Unknown command: {arg0}\r\n").ok();
+            }
+        }
+    }
 }
 
 impl Process for LocalShell {
@@ -65,10 +77,13 @@ impl Process for LocalShell {
                 }
             }
             Key::Enter => {
-                let mut screen = SCREEN.get().lock().await;
-                write!(screen, "\r\nCommand: {}\r\n", command.as_str()).ok();
+                let cmd = command.clone();
                 command.clear();
                 self.cursor_x.store(0, Ordering::SeqCst);
+                drop(command);
+
+                write!(SCREEN.get().lock().await, "\r\n").ok();
+                self.dispatch_command(&cmd).await;
             }
             _ => {}
         }
