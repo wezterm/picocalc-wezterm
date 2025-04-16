@@ -251,7 +251,7 @@ pub async fn time_sync(stack: Stack<'static>) {
     }
 }
 
-pub async fn time_command(_ignored: &str) {
+pub async fn time_command(_args: &[&str]) {
     let now_ts = UnixTime::now();
     let rfc3339 = Rfc3339(now_ts.as_chrono());
     print!("The time is {rfc3339}\r\n");

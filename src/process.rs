@@ -5,6 +5,7 @@ use crate::storage::ls_command;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use embassy_sync::blocking_mutex::CriticalSectionMutex;
@@ -46,11 +47,12 @@ impl LocalShell {
     }
 
     async fn dispatch_command(&self, command: &str) {
-        let (arg0, args) = command.split_once(' ').unwrap_or((command, ""));
+        let argv: Vec<&str> = command.split(' ').collect();
+        let arg0 = argv[0];
         match arg0 {
-            "ls" => ls_command(args).await,
-            "free" => crate::heap::free_command(args).await,
-            "time" => crate::time::time_command(args).await,
+            "ls" => ls_command(&argv).await,
+            "free" => crate::heap::free_command(&argv).await,
+            "time" => crate::time::time_command(&argv).await,
             _ => {
                 let mut screen = SCREEN.get().lock().await;
                 write!(screen, "Unknown command: {arg0}\r\n").ok();

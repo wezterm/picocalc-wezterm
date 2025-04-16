@@ -121,7 +121,7 @@ pub fn init_heap() {
     unsafe { HEAP.add_secondary(Region::new(secondary_start, 1024)) }
 }
 
-pub async fn free_command(_ignored: &str) {
+pub async fn free_command(_args: &[&str]) {
     print!(
         "{:<10} {:>10} {:>10} {:>10}\r\n",
         "", "TOTAL", "USED", "FREE"

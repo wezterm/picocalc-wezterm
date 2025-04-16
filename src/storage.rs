@@ -189,8 +189,8 @@ async fn sdcard_hot_plug(mut sd_detect: Input<'static>) {
     }
 }
 
-pub async fn ls_command(path: &str) {
-    log::debug!("invoked ls on path={path}\r\n");
+pub async fn ls_command(args: &[&str]) {
+    log::debug!("invoked ls with {args:?}\r\n");
     let mut storage = STORAGE.get().lock().await;
     let Some(mgr) = storage.vol_mgr() else {
         print!("No SD card is present\r\n");
@@ -213,6 +213,7 @@ pub async fn ls_command(path: &str) {
         }
     };
 
+    let path = args.get(1).copied().unwrap_or("");
     let (dirs, entry_name) = match path.rsplit_once('/') {
         Some((dirs, entry_name)) => (Some(dirs), entry_name),
         None => (None, path),
