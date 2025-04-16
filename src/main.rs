@@ -7,7 +7,7 @@ use crate::heap::HEAP;
 use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::rng::WezTermRng;
-use crate::screen::{Attributes, SCREEN};
+use crate::screen::SCREEN;
 use crate::time::WezTermTimeSource;
 use core::cell::RefCell;
 use core::fmt::Write as _;
@@ -175,7 +175,7 @@ async fn main(spawner: Spawner) {
     .await;
 
     print!(
-        "\u{1b}[1mWezTerm {}\u{1b}[0m\r\n",
+        "\u{1b}[35mWezTerm {}\u{1b}[0m\r\n",
         env!("CARGO_PKG_VERSION")
     );
 
@@ -184,12 +184,11 @@ async fn main(spawner: Spawner) {
         Timer::after(Duration::from_millis(100)).await;
         log::error!("prior panic: {msg}");
         let mut screen = SCREEN.get().lock().await;
-        screen.set_attributes(Attributes::BOLD);
-        write!(screen, "Panic: ").ok();
+        write!(screen, "\u{1f}[1mPanic: ").ok();
         for chunk in msg.lines() {
             write!(screen, "{chunk}\r\n").ok();
         }
-        screen.set_attributes(Attributes::NONE);
+        write!(screen, "\u{1f}[0m").ok();
     }
     spawner.must_spawn(watchdog_task(Watchdog::new(p.WATCHDOG)));
     crate::rng::init_rng(p.TRNG);

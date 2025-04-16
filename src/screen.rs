@@ -5,7 +5,7 @@ use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Duration, Instant, Ticker};
 use embedded_graphics::mono_font::{MonoFont, MonoTextStyleBuilder};
-use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::pixelcolor::{Rgb565, Rgb888};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::*;
 use embedded_graphics::text::Text;
@@ -47,6 +47,13 @@ const MAX_COLS: usize = 80;
 pub struct Line {
     pub ascii: [u8; MAX_COLS],
     pub attributes: [Attributes; MAX_COLS],
+    /// The encoding for colors is two nybbles;
+    /// the high nybble represents the bg color,
+    /// the low nybble is the fg color.
+    /// value 0 in a nybble indicates the default
+    /// color for that position.
+    /// value 1..=0xf is the 1-based index into ANSI_COLOR_IDX
+    pub colors: [u8; MAX_COLS],
     needs_paint: bool,
 }
 
@@ -54,15 +61,19 @@ pub struct Line {
 pub struct Cluster<'a> {
     pub text: &'a str,
     pub attributes: Attributes,
+    pub color: u8,
     pub start_col: usize,
     pub end_col: usize,
 }
 
+use core::iter::{Copied, Enumerate, Peekable, Zip};
+use core::slice::Iter;
+
 pub struct ClusterIter<'a> {
     line: &'a Line,
-    last_attr: Attributes,
+    last_attr: (Attributes, u8),
     start_idx: Option<usize>,
-    attr_iter: core::iter::Peekable<core::iter::Enumerate<core::slice::Iter<'a, Attributes>>>,
+    attr_iter: Peekable<Enumerate<Zip<Copied<Iter<'a, Attributes>>, Copied<Iter<'a, u8>>>>>,
     cursor_x: Option<usize>,
 }
 
@@ -77,7 +88,8 @@ impl<'a> ClusterIter<'a> {
             text,
             start_col,
             end_col,
-            attributes: self.last_attr,
+            attributes: self.last_attr.0,
+            color: self.last_attr.1,
         })
     }
 }
@@ -88,10 +100,10 @@ impl<'a> Iterator for ClusterIter<'a> {
     fn next(&mut self) -> Option<Cluster<'a>> {
         loop {
             if let Some(cursor_x) = self.cursor_x {
-                if let Some((idx, attr)) = self.attr_iter.peek() {
+                if let Some((idx, attr_tuple)) = self.attr_iter.peek() {
                     if *idx == cursor_x {
                         let idx = *idx;
-                        let attr = *attr;
+                        let attr_tuple = *attr_tuple;
                         if let Some(cluster) = self.take_current(idx) {
                             return Some(cluster);
                         }
@@ -101,28 +113,28 @@ impl<'a> Iterator for ClusterIter<'a> {
 
                         // Stage an entry for the cursor, flipping it
                         // to reverse its video attributes
-                        self.last_attr = *attr;
-                        self.last_attr.toggle(Attributes::REVERSE);
+                        self.last_attr = attr_tuple;
+                        self.last_attr.0.toggle(Attributes::REVERSE);
                         self.start_idx = Some(idx);
                     }
                 }
             }
 
-            if let Some((idx, attr)) = self.attr_iter.next() {
+            if let Some((idx, attr_tuple)) = self.attr_iter.next() {
                 match self.start_idx {
                     Some(_) => {
-                        if *attr == self.last_attr {
+                        if attr_tuple == self.last_attr {
                             continue;
                         }
 
                         let cluster = self.take_current(idx);
-                        self.last_attr = *attr;
+                        self.last_attr = attr_tuple;
                         self.start_idx = Some(idx);
                         return cluster;
                     }
                     None => {
                         self.start_idx = Some(idx);
-                        self.last_attr = *attr;
+                        self.last_attr = attr_tuple;
                     }
                 }
             } else {
@@ -138,15 +150,22 @@ impl Line {
     pub fn clear(&mut self) {
         self.ascii.fill(0x20);
         self.attributes.fill(Attributes::NONE);
+        self.colors.fill(0);
         self.needs_paint = true;
     }
 
     pub fn cluster<'a>(&'a self, cursor_x: Option<u8>) -> ClusterIter<'a> {
         ClusterIter {
             line: self,
-            last_attr: Attributes::NONE,
+            last_attr: (Attributes::NONE, 0),
             start_idx: None,
-            attr_iter: self.attributes.iter().enumerate().peekable(),
+            attr_iter: self
+                .attributes
+                .iter()
+                .copied()
+                .zip(self.colors.iter().copied())
+                .enumerate()
+                .peekable(),
             cursor_x: cursor_x.map(|x| x as usize),
         }
     }
@@ -157,6 +176,7 @@ impl Default for Line {
         Line {
             ascii: [0x20; MAX_COLS],
             attributes: [Attributes::NONE; MAX_COLS],
+            colors: [0; MAX_COLS],
             needs_paint: true,
         }
     }
@@ -207,10 +227,12 @@ impl VTActor for ScreenModel {
 
         let cursor_x = self.cursor_x as usize;
         let attributes = self.current_attributes;
+        let color = self.current_color;
         let line = self.line_log_mut(self.cursor_y).unwrap();
         line.needs_paint = true;
         line.ascii[cursor_x] = ascii;
         line.attributes[cursor_x] = attributes;
+        line.colors[cursor_x] = color;
         self.cursor_x += 1;
         if self.cursor_x >= self.width {
             self.cursor_x = 0;
@@ -258,25 +280,27 @@ impl VTActor for ScreenModel {
                 // FIXME: just doing basic clear to end of line here
                 let x = self.cursor_x;
                 let current_attributes = self.current_attributes;
+                let current_color = self.current_color;
                 let line = self.line_log_mut(self.cursor_y).unwrap();
-                for (ascii, attr) in line
+                for (ascii, (attr, color)) in line
                     .ascii
                     .iter_mut()
-                    .zip(line.attributes.iter_mut())
+                    .zip(line.attributes.iter_mut().zip(line.colors.iter_mut()))
                     .skip(x as usize)
                 {
                     *ascii = 0x20;
                     *attr = current_attributes;
+                    *color = current_color;
                 }
                 line.needs_paint = true;
             }
             b'm' => {
-                log::info!("SGR!");
                 for p in params {
                     match p {
                         CsiParam::Integer(0) => {
                             // Reset all to normal
                             self.current_attributes = Attributes::NONE;
+                            self.current_color = 0;
                         }
                         CsiParam::Integer(1) => {
                             self.current_attributes.set(Attributes::BOLD, true);
@@ -290,7 +314,8 @@ impl VTActor for ScreenModel {
                             self.current_attributes.set(Attributes::UNDERLINE, true);
                         }
                         CsiParam::Integer(9) => {
-                            self.current_attributes.set(Attributes::STRIKE_THROUGH, true);
+                            self.current_attributes
+                                .set(Attributes::STRIKE_THROUGH, true);
                         }
                         CsiParam::Integer(22) => {
                             self.current_attributes.set(Attributes::BOLD, false);
@@ -300,7 +325,26 @@ impl VTActor for ScreenModel {
                             self.current_attributes.set(Attributes::UNDERLINE, false);
                         }
                         CsiParam::Integer(29) => {
-                            self.current_attributes.set(Attributes::STRIKE_THROUGH, false);
+                            self.current_attributes
+                                .set(Attributes::STRIKE_THROUGH, false);
+                        }
+                        CsiParam::Integer(39) => {
+                            // Set default fg
+                            self.current_color &= 0xf0;
+                        }
+                        CsiParam::Integer(49) => {
+                            // Set default bg
+                            self.current_color &= 0x0f;
+                        }
+                        CsiParam::Integer(fg) if (30..=37).contains(fg) => {
+                            // Set fg color
+                            self.current_color &= 0xf0;
+                            self.current_color |= (fg - 29) as u8;
+                        }
+                        CsiParam::Integer(bg) if (40..=47).contains(bg) => {
+                            // Set bg color
+                            self.current_color &= 0x0f;
+                            self.current_color |= ((bg - 39) as u8) << 4;
                         }
                         _ => {
                             log::info!("CSI SGR {p:?} not handled");
@@ -318,12 +362,59 @@ impl VTActor for ScreenModel {
 
 const MAX_LINES: usize = 60;
 
+const ANSI_COLOR_IDX: [Rgb888; 16] = [
+    // Black
+    Rgb888::new(0x00, 0x00, 0x00),
+    // Maroon
+    Rgb888::new(0xcc, 0x55, 0x55),
+    // Green
+    Rgb888::new(0x55, 0xcc, 0x55),
+    // Olive
+    Rgb888::new(0xcd, 0xcd, 0x55),
+    // Navy
+    Rgb888::new(0x54, 0x55, 0xcb),
+    // Purple
+    Rgb888::new(0xcc, 0x55, 0xcc),
+    // Teal
+    Rgb888::new(0x7a, 0xca, 0xca),
+    // Silver
+    Rgb888::new(0xcc, 0xcc, 0xcc),
+    // Grey
+    Rgb888::new(0x55, 0x55, 0x55),
+    // Red
+    Rgb888::new(0xff, 0x55, 0x55),
+    // Lime
+    Rgb888::new(0x55, 0xff, 0x55),
+    // Yellow
+    Rgb888::new(0xff, 0xff, 0x55),
+    // Blue
+    Rgb888::new(0x55, 0x55, 0xff),
+    // Fuchsia
+    Rgb888::new(0xff, 0x55, 0xff),
+    // Aqua
+    Rgb888::new(0x55, 0xff, 0xff),
+    // White
+    Rgb888::new(0xff, 0xff, 0xff),
+];
+
+fn color_nybble(nybble: u8, default_value: Rgb565) -> Rgb565 {
+    if nybble == 0 {
+        return default_value;
+    }
+
+    let idx = nybble as usize - 1;
+    let color = ANSI_COLOR_IDX[idx].into();
+
+    color
+}
+
 pub struct ScreenModel {
     lines: [Line; MAX_LINES],
     /// cursor x,y in logical coordinates
     cursor_x: u8,
     cursor_y: LogicalY,
     current_attributes: Attributes,
+    current_color: u8,
     pub width: u8,
     pub height: u8,
     font: &'static MonoFont<'static>,
@@ -342,10 +433,6 @@ impl core::fmt::Write for Screen {
 }
 
 impl ScreenModel {
-    pub fn set_attributes(&mut self, attributes: Attributes) {
-        self.current_attributes = attributes;
-    }
-
     fn check_scroll(&mut self) {
         log::trace!(
             "consider scroll, y={:?}, height={} first_line_idx={} pixel={}",
@@ -455,9 +542,9 @@ impl ScreenModel {
             } else if cluster.attributes.contains(Attributes::BOLD) {
                 Rgb565::CSS_SALMON
             } else {
-                Rgb565::GREEN
+                color_nybble(cluster.color & 0xf, Rgb565::GREEN)
             };
-            let bg_color = Rgb565::BLACK;
+            let bg_color = color_nybble((cluster.color >> 4) & 0xf, Rgb565::BLACK);
 
             let (fg_color, bg_color) = if cluster.attributes.contains(Attributes::REVERSE) {
                 (bg_color, fg_color)
@@ -559,6 +646,7 @@ impl ScreenModel {
                 start_col: 0,
                 end_col: MAX_COLS,
                 attributes: Attributes::NONE,
+                color: 0,
             };
             draw_cluster(&blank_cluster, row_y);
             if boundary_height > 0 {
@@ -593,6 +681,7 @@ impl Default for ScreenModel {
             first_line_idx: 0,
             pixel_offset_first_line: 0,
             current_attributes: Attributes::NONE,
+            current_color: 0,
         }
     }
 }
