@@ -311,7 +311,10 @@ async fn main(spawner: Spawner) {
         );
     }
 
-    init_storage(p.PIN_16, p.PIN_17, p.PIN_18, p.PIN_19, p.PIN_22, p.SPI0).await;
+    init_storage(
+        &spawner, p.PIN_16, p.PIN_17, p.PIN_18, p.PIN_19, p.PIN_22, p.SPI0,
+    )
+    .await;
 
     let wifi_control = setup_wifi(
         &spawner, p.PIN_23, p.PIN_24, p.PIN_25, p.PIN_29, p.PIO0, p.DMA_CH0,
