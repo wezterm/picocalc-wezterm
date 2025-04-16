@@ -45,8 +45,6 @@ macro_rules! print {
         {
             use crate::screen::SCREEN;
             use core::fmt::Write;
-            use embassy_time::Duration;
-            use embassy_time::Timer;
             use crate::process::current_proc;
             let proc = current_proc();
             {
@@ -58,7 +56,6 @@ macro_rules! print {
             }
             // Get the shell to render its prompt again
             proc.render().await;
-            Timer::after(Duration::from_millis(5)).await;
         }
     }
 }
