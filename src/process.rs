@@ -41,6 +41,7 @@ impl LocalShell {
         match arg0 {
             "ls" => ls_command(args).await,
             "free" => crate::heap::free_command(args).await,
+            "time" => crate::time::time_command(args).await,
             _ => {
                 let mut screen = SCREEN.get().lock().await;
                 write!(screen, "Unknown command: {arg0}\r\n").ok();
