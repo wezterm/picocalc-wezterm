@@ -274,7 +274,7 @@ impl VTActor for ScreenModel {
         );
     }
     fn csi_dispatch(&mut self, params: &[CsiParam], truncated: bool, byte: u8) {
-        log::info!("csi: {params:?} truncated={truncated} byte={byte}");
+        log::debug!("csi: {params:?} truncated={truncated} byte={byte}");
         match byte {
             b'K' => {
                 // FIXME: just doing basic clear to end of line here

@@ -53,6 +53,10 @@ impl LocalShell {
             "ls" => ls_command(&argv).await,
             "free" => crate::heap::free_command(&argv).await,
             "time" => crate::time::time_command(&argv).await,
+            "reboot" => crate::keyboard::reboot(),
+            "bootsel" => crate::keyboard::reboot_bootsel(),
+            "bat" => crate::keyboard::battery_command(&argv).await,
+            "bl" => crate::keyboard::backlight_command(&argv).await,
             _ => {
                 let mut screen = SCREEN.get().lock().await;
                 write!(screen, "Unknown command: {arg0}\r\n").ok();

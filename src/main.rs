@@ -4,7 +4,6 @@
 
 use crate::config::{CONFIG, Flash};
 use crate::heap::HEAP;
-use crate::keyboard::set_lcd_backlight;
 use crate::psram::init_psram;
 use crate::rng::WezTermRng;
 use crate::screen::SCREEN;
@@ -20,7 +19,7 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpEndpoint, Stack};
 use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{PIO0, PIO1, SPI1, TRNG, UART0, USB};
+use embassy_rp::peripherals::{PIO0, PIO1, SPI1, TRNG, UART0, UART1, USB};
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::Spi;
 use embassy_rp::uart::BufferedInterruptHandler;
@@ -109,6 +108,7 @@ bind_interrupts!(struct Irqs {
     PIO1_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO1>;
     I2C1_IRQ => embassy_rp::i2c::InterruptHandler<embassy_rp::peripherals::I2C1>;
     UART0_IRQ => BufferedInterruptHandler<UART0>;
+    UART1_IRQ => BufferedInterruptHandler<UART1>;
     TRNG_IRQ => embassy_rp::trng::InterruptHandler<TRNG>;
 });
 
@@ -168,6 +168,9 @@ async fn main(spawner: Spawner) {
         p.PIN_0,
         p.PIN_1,
         p.UART0,
+        p.PIN_8,
+        p.PIN_9,
+        p.UART1,
         usb::Driver::new(p.USB, Irqs),
     )
     .await;
@@ -195,7 +198,7 @@ async fn main(spawner: Spawner) {
     i2c_config.frequency = 400_000;
     let scl = p.PIN_7;
     let sda = p.PIN_6;
-    let mut i2c_bus = embassy_rp::i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, i2c_config);
+    let i2c_bus = embassy_rp::i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, i2c_config);
 
     let miso = p.PIN_12;
     let mosi = p.PIN_11;
@@ -224,9 +227,6 @@ async fn main(spawner: Spawner) {
     let dcx = Output::new(dcx, Level::Low);
     let rst = Output::new(rst, Level::Low);
     // dcx: 0 = command, 1 = data
-
-    // Enable LCD backlight
-    set_lcd_backlight(&mut i2c_bus, 0x80).await;
 
     // display interface abstraction from SPI and DC
     const DISPLAY_BUFFER_SIZE: usize = 320 * 3 * 320;
@@ -359,6 +359,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
     runner.run().await
 }
 
+#[macro_export]
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -368,6 +369,7 @@ macro_rules! mk_static {
     }};
 }
 
+#[macro_export]
 macro_rules! static_bytes {
     ($n:expr) => {
         mk_static!([u8; $n], [0u8; $n])

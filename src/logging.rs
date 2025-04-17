@@ -1,17 +1,16 @@
-use crate::Irqs;
 use crate::keyboard::{Key, KeyReport, KeyState, Modifiers};
 use crate::process::SHELL;
+use crate::{Irqs, mk_static, static_bytes};
 use core::fmt::Write as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_rp::peripherals::{PIN_0, PIN_1, UART0, USB};
+use embassy_rp::peripherals::{PIN_0, PIN_1, PIN_8, PIN_9, UART0, UART1, USB};
 use embassy_rp::uart::{BufferedUart, BufferedUartRx, BufferedUartTx, Config as UartConfig};
 use embassy_rp::usb;
 use embassy_sync::pipe::Pipe;
 use embassy_usb_logger::UsbLogger;
 use embedded_io_async::{Read, Write as _};
 use log::{LevelFilter, Metadata, Record};
-use static_cell::StaticCell;
 
 // This module logs to both UART0 and to a USB CDC endpoint.
 // The former is routed via the host picocalc board and a CH340C
@@ -24,30 +23,40 @@ pub async fn setup_logging(
     spawner: &Spawner,
     tx_pin: PIN_0,
     rx_pin: PIN_1,
-    uart: UART0,
+    uart0: UART0,
+    mcu_tx_pin: PIN_8,
+    mcu_rx_pin: PIN_9,
+    mcu_uart: UART1,
     usb: usb::Driver<'static, USB>,
 ) {
-    static TX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
-    let tx_buf = &mut TX_BUF.init([0; 16])[..];
-    static RX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
-    let rx_buf = &mut RX_BUF.init([0; 16])[..];
-    let uart = BufferedUart::new(
-        uart,
+    let uart0 = BufferedUart::new(
+        uart0,
         Irqs,
         tx_pin,
         rx_pin,
-        tx_buf,
-        rx_buf,
+        static_bytes!(128),
+        static_bytes!(8),
         UartConfig::default(),
     );
-    let (mut tx, rx) = uart.split();
+    let (mut tx0, rx0) = uart0.split();
 
-    let _ = tx
+    let _ = tx0
         .write_all(b"\r\n\r\n *** WezTerm picocalc starting up ***\r\n\r\n")
         .await;
 
-    spawner.must_spawn(log(tx, usb));
-    spawner.must_spawn(uart_reader(rx));
+    spawner.must_spawn(log(tx0, usb));
+    spawner.must_spawn(uart_reader(rx0));
+
+    let mcu_uart = BufferedUart::new(
+        mcu_uart,
+        Irqs,
+        mcu_tx_pin,
+        mcu_rx_pin,
+        static_bytes!(128),
+        static_bytes!(128),
+        UartConfig::default(),
+    );
+    spawner.must_spawn(mcu_uart_reader(mcu_uart));
 }
 
 type UsbLog = UsbLogger<1024, embassy_usb_logger::DummyHandler>;
@@ -143,6 +152,26 @@ pub async fn log(uart: BufferedUartTx<'static, UART0>, driver: usb::Driver<'stat
         LOGGER.run_uart(uart),
     )
     .await;
+}
+
+#[embassy_executor::task]
+async fn mcu_uart_reader(mut rx: BufferedUart<'static, UART1>) {
+    loop {
+        let mut buf = [0; 128];
+        match rx.read(&mut buf).await {
+            Ok(n) => match core::str::from_utf8(&buf[0..n]) {
+                Ok(s) => {
+                    log::info!("mcu_uart: {s}");
+                }
+                Err(_) => {
+                    log::info!("mcu_uart: data not utf8: {:x?}", &buf[0..n]);
+                }
+            },
+            Err(err) => {
+                log::info!("mcu_uart: read failed: {err:?}");
+            }
+        }
+    }
 }
 
 #[embassy_executor::task]
