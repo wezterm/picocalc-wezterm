@@ -1,7 +1,10 @@
+use crate::net::alloc::string::ToString;
+extern crate alloc;
 use crate::config::CONFIG;
 use crate::rng::WezTermRng;
 use crate::screen::SCREEN;
 use crate::{Irqs, SCREEN_HEIGHT, SCREEN_WIDTH, mk_static, static_bytes};
+use alloc::string::String;
 use core::fmt::Write;
 use cyw43::Control;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
@@ -12,13 +15,20 @@ use embassy_net::{IpEndpoint, Stack};
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::Pio;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::lazy_lock::LazyLock;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use embedded_io_async::Read;
 use rand_core::RngCore;
 use static_cell::StaticCell;
 use sunset::{CliEvent, SessionCommand};
 use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
+
+static WIFI_CONTROL: LazyLock<Mutex<CriticalSectionRawMutex, Option<Control<'static>>>> =
+    LazyLock::new(|| Mutex::new(None));
+static STACK: LazyLock<Mutex<CriticalSectionRawMutex, Option<Stack<'static>>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[embassy_executor::task]
 pub async fn run_cyw43(
@@ -40,7 +50,7 @@ pub async fn setup_wifi(
     pin_29: embassy_rp::peripherals::PIN_29,
     pio_0: embassy_rp::peripherals::PIO0,
     dma_ch0: embassy_rp::peripherals::DMA_CH0,
-) -> Control<'static> {
+) {
     let fw = include_bytes!("../embassy/cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../embassy/cyw43-firmware/43439A0_clm.bin");
 
@@ -88,19 +98,20 @@ pub async fn setup_wifi(
         let config = CONFIG.get().lock().await;
         (config.ssid.clone(), config.wifi_pw.clone())
     };
-    print!("Connecting to \u{1b}[1m{ssid}\u{1b}[0m...\r\n");
-    loop {
+    if !ssid.is_empty() {
+        print!("Connecting to \u{1b}[1m{ssid}\u{1b}[0m...\r\n");
         match control
             .join(&ssid, cyw43::JoinOptions::new(wifi_pw.as_bytes()))
             .await
         {
-            Ok(_) => break,
+            Ok(_) => {}
             Err(err) => {
                 log::error!("join failed with status={}", err.status);
                 print!("Failed with status {}\r\n", err.status);
             }
         }
     }
+    WIFI_CONTROL.get().lock().await.replace(control);
 
     log::info!("waiting for TCP to be up...");
     stack.wait_config_up().await;
@@ -111,9 +122,7 @@ pub async fn setup_wifi(
     }
 
     spawner.must_spawn(crate::time::time_sync(stack));
-    // spawner.must_spawn(ssh_session_task(stack));
-
-    control
+    STACK.get().lock().await.replace(stack);
 }
 
 #[embassy_executor::task]
@@ -173,14 +182,17 @@ async fn ssh_channel_task(mut channel: ChanInOut<'static, 'static>) {
 }
 
 #[embassy_executor::task]
-async fn ssh_session_task(stack: Stack<'static>) {
+async fn ssh_session_task(host: String, command: Option<String>) {
+    let Some(stack) = STACK.get().lock().await.as_ref().copied() else {
+        print!("network is offline\r\n");
+        return;
+    };
+
+    let command = command.as_deref().unwrap_or("uname -a");
+
     let dns_client = DnsSocket::new(stack);
 
-    let host = "foo.lan";
-
-    write!(SCREEN.get().lock().await, "$ ssh {host}\r\n").ok();
-
-    match dns_client.query(host, DnsQueryType::A).await {
+    match dns_client.query(&host, DnsQueryType::A).await {
         Ok(addrs) => {
             log::info!("{host} -> {addrs:?}");
             let mut tcp_socket = TcpSocket::new(stack, static_bytes!(8192), static_bytes!(8192));
@@ -283,10 +295,9 @@ async fn ssh_session_task(stack: Stack<'static>) {
                                             log::error!("requesting pty failed {err:?}");
                                         }
                                         log::info!("setting command");
-                                        let command = "uname -a";
                                         write!(SCREEN.get().lock().await, "execute {command}\r\n")
                                             .ok();
-                                        if let Err(err) = s.cmd(&SessionCommand::Exec(command)) {
+                                        if let Err(err) = s.cmd(&SessionCommand::Exec(&command)) {
                                             log::error!("command failed: {err:?}");
                                         }
                                         log::info!("SessionOpened completed");
@@ -321,6 +332,31 @@ async fn ssh_session_task(stack: Stack<'static>) {
             log::error!("failed foo.lan: {err:?}");
         }
     }
+}
+
+pub async fn ssh_command(args: &[&str]) {
+    if args.len() > 1 {
+        let hostname = args[1].to_string();
+
+        let command: Option<String> = if args.len() > 2 {
+            Some(args[2..].join(" "))
+        } else {
+            None
+        };
+        let spawn_result = {
+            let spawner = Spawner::for_current_executor().await;
+            spawner.spawn(ssh_session_task(hostname, command))
+        };
+        match spawn_result {
+            Ok(_) => {}
+            Err(err) => {
+                print!("failed to start ssh task {err:?}\r\n");
+            }
+        }
+        return;
+    }
+
+    print!("Usage: ssh [hostname]\r\n");
 }
 
 /*

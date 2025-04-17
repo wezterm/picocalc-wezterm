@@ -57,6 +57,7 @@ impl LocalShell {
             "bootsel" => crate::keyboard::reboot_bootsel(),
             "bat" => crate::keyboard::battery_command(&argv).await,
             "bl" => crate::keyboard::backlight_command(&argv).await,
+            "ssh" => crate::net::ssh_command(&argv).await,
             _ => {
                 let mut screen = SCREEN.get().lock().await;
                 write!(screen, "Unknown command: {arg0}\r\n").ok();

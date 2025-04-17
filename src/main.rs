@@ -287,11 +287,10 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    let wifi_control = crate::net::setup_wifi(
+    crate::net::setup_wifi(
         &spawner, p.PIN_23, p.PIN_24, p.PIN_25, p.PIN_29, p.PIO0, p.DMA_CH0,
     )
     .await;
-    // spawner.must_spawn(wifi_scanner(wifi_control));
 
     let mut ticker = Ticker::every(Duration::from_secs(3600));
     loop {
