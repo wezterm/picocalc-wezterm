@@ -35,7 +35,7 @@ pub fn current_proc() -> ProcHandle {
     CURRENT.get().lock(|cell| Arc::clone(&*cell.borrow()))
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 pub trait Process {
     async fn key_input(&self, key: KeyReport);
     async fn render(&self);
@@ -61,6 +61,7 @@ impl LocalShell {
         let argv: Vec<&str> = command.split(' ').collect();
         let arg0 = argv[0];
         match arg0 {
+            "cls" => crate::screen::cls_command(&argv).await,
             "ls" => ls_command(&argv).await,
             "free" => crate::heap::free_command(&argv).await,
             "time" => crate::time::time_command(&argv).await,
@@ -69,6 +70,7 @@ impl LocalShell {
             "bat" => crate::keyboard::battery_command(&argv).await,
             "bl" => crate::keyboard::backlight_command(&argv).await,
             "ssh" => crate::net::ssh_command(&argv).await,
+            "config" => crate::config::config_command(&argv).await,
             _ => {
                 let mut screen = SCREEN.get().lock().await;
                 write!(screen, "Unknown command: {arg0}\r\n").ok();
@@ -77,7 +79,7 @@ impl LocalShell {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl Process for LocalShell {
     async fn render(&self) {
         let mut screen = SCREEN.get().lock().await;

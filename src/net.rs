@@ -102,20 +102,29 @@ pub async fn setup_wifi(
         .await;
 
     let (ssid, wifi_pw) = {
-        let config = CONFIG.get().lock().await;
-        (config.ssid.clone(), config.wifi_pw.clone())
+        let mut config = CONFIG.get().lock().await;
+        let ssid = config.fetch("wifi_ssid").await;
+        let wifi_pw = config.fetch("wifi_pw").await;
+        (ssid, wifi_pw)
     };
-    if !ssid.is_empty() {
-        print!("Connecting to \u{1b}[1m{ssid}\u{1b}[0m...\r\n");
-        match control
-            .join(&ssid, cyw43::JoinOptions::new(wifi_pw.as_bytes()))
-            .await
-        {
-            Ok(_) => {}
-            Err(err) => {
-                log::error!("join failed with status={}", err.status);
-                print!("Failed with status {}\r\n", err.status);
+    match (ssid, wifi_pw) {
+        (Ok(Some(ssid)), Ok(Some(wifi_pw))) => {
+            if !ssid.is_empty() {
+                print!("Connecting to \u{1b}[1m{ssid}\u{1b}[0m...\r\n");
+                match control
+                    .join(&ssid, cyw43::JoinOptions::new(wifi_pw.as_bytes()))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("join failed with status={}", err.status);
+                        print!("Failed with status {}\r\n", err.status);
+                    }
+                }
             }
+        }
+        _ => {
+            print!("wifi_ssid and/or wifi_pw are not set\r\n");
         }
     }
     WIFI_CONTROL.get().lock().await.replace(control);
@@ -241,7 +250,7 @@ async fn ssh_session_task(host: String, command: Option<String>) {
 
                     let runner = ssh_client.run(&mut read, &mut write);
                     let mut progress = ProgressHolder::new();
-                    let ssh_pw = CONFIG.get().lock().await.ssh_pw.clone();
+                    let ssh_pw = CONFIG.get().lock().await.fetch("ssh_pw").await;
                     let ssh_ticker = async {
                         loop {
                             match ssh_client.progress(&mut progress).await {
@@ -259,7 +268,11 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                                         req.username("wez").expect("set user");
                                     }
                                     CliEvent::Password(req) => {
-                                        req.password(&ssh_pw).expect("set pw");
+                                        match &ssh_pw {
+                                            Ok(Some(pw)) => req.password(&pw),
+                                            _ => req.skip(),
+                                        }
+                                        .expect("set pw");
                                     }
                                     CliEvent::Pubkey(req) => {
                                         req.skip().expect("skip pubkey");
@@ -380,7 +393,7 @@ struct SshProcess {
     key_sender: Arc<Channel<CS, KeyReport, 4>>,
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl Process for SshProcess {
     async fn render(&self) {}
     fn un_prompt(&self, _screen: &mut Screen) {}

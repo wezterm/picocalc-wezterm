@@ -1421,6 +1421,7 @@ dependencies = [
  "profont",
  "rand_chacha",
  "rand_core",
+ "sequential-storage",
  "serde",
  "serde-json-core",
  "sntpc",
@@ -1759,6 +1760,16 @@ name = "semver-parser"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
+
+[[package]]
+name = "sequential-storage"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d8e933f534642c25b7341338c10e2250187c8cd198c3957ef6894265eefda86"
+dependencies = [
+ "embedded-storage-async",
+ "heapless 0.8.0",
+]
 
 [[package]]
 name = "serde"

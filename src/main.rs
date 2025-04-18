@@ -64,6 +64,7 @@ type PicoCalcDisplay<'a> = mipidsi::Display<
 >;
 
 mod config;
+mod fixed_str;
 mod heap;
 mod keyboard;
 mod logging;
@@ -167,6 +168,7 @@ async fn main(spawner: Spawner) {
             write!(screen, "{chunk}\r\n").ok();
         }
         write!(screen, "\u{1f}[0m").ok();
+        Timer::after(Duration::from_secs(5)).await;
     }
     spawner.must_spawn(watchdog_task(Watchdog::new(p.WATCHDOG)));
     crate::rng::init_rng(p.TRNG);
@@ -225,39 +227,8 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(crate::screen::screen_painter(display));
     spawner.must_spawn(crate::keyboard::keyboard_reader(i2c_bus));
 
-    let mut flash = Flash::new(p.FLASH, p.DMA_CH3);
-    {
-        let mut config = CONFIG.get().lock().await;
-        match config.load_in_place(&mut flash) {
-            Ok(()) => {
-                log::info!("Loaded configuration: {config:#?}");
-            }
-            Err(err) => {
-                log::error!("Failed to load config: {err:?}");
-                config.ssid.push_str("SECRET").ok();
-                config.wifi_pw.push_str("SECRET").ok();
-                config.ssh_pw.push_str("SECRET").ok();
-                if false {
-                    // To bootstrap the config
-                    match config.save(&mut flash) {
-                        Ok(()) => {
-                            log::info!("Wrote configuration!");
-                        }
-                        Err(err) => {
-                            log::error!("Failed to write config: {err:?}");
-
-                            print!("BORK: {err:?}");
-
-                            let mut ticker = Ticker::every(Duration::from_millis(5000));
-                            loop {
-                                ticker.next().await;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
+    let flash = Flash::new(p.FLASH, p.DMA_CH3);
+    CONFIG.get().lock().await.assign_flash(flash);
 
     let psram = init_psram(
         p.PIO1, p.PIN_21, p.PIN_2, p.PIN_3, p.PIN_20, p.DMA_CH1, p.DMA_CH2,

@@ -433,6 +433,19 @@ impl core::fmt::Write for Screen {
 }
 
 impl ScreenModel {
+    pub fn clear(&mut self) {
+        for line in &mut self.lines {
+            line.clear();
+        }
+        self.cursor_x = 0;
+        self.cursor_y = LogicalY(0);
+        self.current_attributes = Attributes::NONE;
+        self.current_color = 0;
+        self.first_line_idx = 0;
+        self.full_repaint = true;
+        self.pixel_offset_first_line = 0;
+    }
+
     fn check_scroll(&mut self) {
         log::trace!(
             "consider scroll, y={:?}, height={} first_line_idx={} pixel={}",
@@ -699,4 +712,8 @@ pub async fn screen_painter(mut display: PicoCalcDisplay<'static>) {
         SCREEN.get().lock().await.update_display(&mut display);
         ticker.next().await;
     }
+}
+
+pub async fn cls_command(_args: &[&str]) {
+    SCREEN.get().lock().await.clear();
 }

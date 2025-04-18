@@ -1,46 +1,165 @@
-use embassy_rp::flash::{Async, ERASE_SIZE, Error as FlashError, Flash as RpFlash, WRITE_SIZE};
+use crate::fixed_str::FixedString;
+use embassy_rp::flash::{
+    Async, ERASE_SIZE, Error as FlashError, Flash as RpFlash, PAGE_SIZE, WRITE_SIZE,
+};
 use embassy_rp::peripherals::{DMA_CH3, FLASH};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex;
 use embedded_io::ErrorKind;
-use heapless::String;
-use postcard::{Deserializer, serialize_with_flavor};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use heapless::FnvIndexMap;
+use sequential_storage::cache::NoCache;
+use sequential_storage::erase_all;
+use sequential_storage::map::{fetch_all_items, fetch_item, remove_item, store_item};
 
 const PICO2_FLASH_SIZE: usize = 4 * 1024 * 1024;
-pub const CONFIG_SIZE: u32 = 4096;
+pub const CONFIG_SIZE: u32 = ERASE_SIZE as u32 * 2;
 pub const CONFIG_BASE: u32 = PICO2_FLASH_SIZE as u32 - CONFIG_SIZE;
+const SCRATCH_SIZE: usize = PAGE_SIZE * 2;
 
 pub static CONFIG: LazyLock<Mutex<CriticalSectionRawMutex, Configuration>> =
     LazyLock::new(|| Mutex::new(Configuration::default()));
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default)]
 pub struct Configuration {
-    pub ssid: String<32>,
-    pub wifi_pw: String<32>,
-    pub ssh_pw: String<32>,
+    flash: Option<Flash>,
 }
 
+pub type StrKey = FixedString<32>;
+pub type StrValue = FixedString<128>;
+
 impl Configuration {
-    pub fn load_in_place(&mut self, flash: &mut Flash) -> Result<(), postcard::Error> {
-        let config = Self::load(flash)?;
-        *self = config;
-        Ok(())
+    pub fn assign_flash(&mut self, flash: Flash) {
+        self.flash.replace(flash);
     }
 
-    pub fn load(flash: &mut Flash) -> Result<Self, postcard::Error> {
-        flash.deserialize::<Self, 128>(CONFIG_BASE)
+    pub async fn fetch(
+        &mut self,
+        key: &str,
+    ) -> Result<Option<StrValue>, sequential_storage::Error<embassy_rp::flash::Error>> {
+        match &mut self.flash {
+            Some(flash) => {
+                let key: StrKey = key.try_into()?;
+                let mut buf = [0u8; SCRATCH_SIZE];
+                fetch_item(
+                    &mut flash.flash,
+                    CONFIG_BASE..CONFIG_BASE + CONFIG_SIZE,
+                    &mut NoCache::new(),
+                    &mut buf,
+                    &key,
+                )
+                .await
+            }
+            None => {
+                todo!();
+            }
+        }
     }
 
-    pub fn save(&self, flash: &mut Flash) -> Result<(), postcard::Error> {
-        flash.serialize::<Self, 128>(CONFIG_BASE, self)
+    pub async fn remove(
+        &mut self,
+        key: &str,
+    ) -> Result<(), sequential_storage::Error<embassy_rp::flash::Error>> {
+        match &mut self.flash {
+            Some(flash) => {
+                let key: StrKey = key.try_into()?;
+                let mut buf = [0u8; SCRATCH_SIZE];
+                remove_item(
+                    &mut flash.flash,
+                    CONFIG_BASE..CONFIG_BASE + CONFIG_SIZE,
+                    &mut NoCache::new(),
+                    &mut buf,
+                    &key,
+                )
+                .await
+            }
+            None => {
+                todo!();
+            }
+        }
+    }
+
+    pub async fn store(
+        &mut self,
+        key: &str,
+        value: StrValue,
+    ) -> Result<(), sequential_storage::Error<embassy_rp::flash::Error>> {
+        match &mut self.flash {
+            Some(flash) => {
+                let key: StrKey = key.try_into()?;
+                let mut buf = [0u8; SCRATCH_SIZE];
+                store_item(
+                    &mut flash.flash,
+                    CONFIG_BASE..CONFIG_BASE + CONFIG_SIZE,
+                    &mut NoCache::new(),
+                    &mut buf,
+                    &key,
+                    &value,
+                )
+                .await
+            }
+            None => {
+                todo!();
+            }
+        }
+    }
+
+    pub async fn format(
+        &mut self,
+    ) -> Result<(), sequential_storage::Error<embassy_rp::flash::Error>> {
+        match &mut self.flash {
+            Some(flash) => {
+                erase_all(&mut flash.flash, CONFIG_BASE..CONFIG_BASE + CONFIG_SIZE).await
+            }
+            None => {
+                todo!();
+            }
+        }
+    }
+
+    pub async fn get_all(
+        &mut self,
+    ) -> Result<
+        FnvIndexMap<StrKey, StrValue, 32>,
+        sequential_storage::Error<embassy_rp::flash::Error>,
+    > {
+        match &mut self.flash {
+            Some(flash) => {
+                let mut buf = [0u8; SCRATCH_SIZE];
+                let mut cache = NoCache::new();
+                let mut iter = fetch_all_items::<StrKey, _, _>(
+                    &mut flash.flash,
+                    CONFIG_BASE..CONFIG_BASE + CONFIG_SIZE,
+                    &mut cache,
+                    &mut buf,
+                )
+                .await?;
+
+                let mut map = FnvIndexMap::new();
+
+                while let Some((key, value)) = iter.next::<StrKey, StrValue>(&mut buf).await? {
+                    if let Err((k, v)) = map.insert(key, value) {
+                        print!("Configuration::get_all: too many keys. Ignoring {k} -> {v}\r\n");
+                    }
+                }
+
+                Ok(map)
+            }
+            None => {
+                todo!();
+            }
+        }
     }
 }
 
 pub struct Flash {
     flash: RpFlash<'static, FLASH, Async, PICO2_FLASH_SIZE>,
+}
+
+impl core::fmt::Debug for Flash {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
+        fmt.debug_struct("Flash").finish()
+    }
 }
 
 impl Flash {
@@ -59,75 +178,6 @@ impl Flash {
     pub async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), FlashError> {
         self.flash.read(offset, bytes).await
     }
-
-    pub fn deserialize<T: DeserializeOwned, const BUF_SIZE: usize>(
-        &mut self,
-        offset: u32,
-    ) -> Result<T, postcard::Error> {
-        use postcard::de_flavors::crc::CrcModifier;
-        use postcard::de_flavors::io::eio::EIOReader;
-        let mut buf = [0u8; BUF_SIZE];
-        let reader = EIOReader::new(self.cursor(offset), &mut buf);
-        let crc = crc::Crc::<u16>::new(&crc::CRC_16_USB);
-        let digest = crc.digest();
-        let mut deserializer = Deserializer::from_flavor(CrcModifier::new(reader, digest));
-        T::deserialize(&mut deserializer)
-    }
-
-    pub fn serialize<T: Serialize, const BUF_SIZE: usize>(
-        &mut self,
-        offset: u32,
-        value: &T,
-    ) -> Result<(), postcard::Error> {
-        use postcard::ser_flavors::Slice;
-        use postcard::ser_flavors::crc::CrcModifier;
-
-        let mut buf = [0u8; BUF_SIZE];
-        let crc = crc::Crc::<u16>::new(&crc::CRC_16_USB);
-        let digest = crc.digest();
-
-        let serialized_slice =
-            serialize_with_flavor(value, CrcModifier::new(Slice::new(&mut buf), digest))?;
-
-        log::info!(
-            "Serialized as {} bytes in {serialized_slice:x?}",
-            serialized_slice.len()
-        );
-
-        assert!(
-            serialized_slice.len() <= CONFIG_SIZE as usize,
-            "{} is larger than CONFIG_SIZE {CONFIG_SIZE}",
-            serialized_slice.len()
-        );
-
-        if let Err(err) = self.flash.blocking_erase(offset, offset + CONFIG_SIZE) {
-            log::error!("Flash blocking erase of {CONFIG_SIZE} bytes @ {offset} failed: {err:?}",);
-            return Err(postcard::Error::SerdeSerCustom);
-        }
-
-        match self.flash.blocking_write(offset, serialized_slice) {
-            Err(err) => {
-                log::error!(
-                    "Flash blocking write of {} bytes @ {offset} failed: {err:?}",
-                    serialized_slice.len()
-                );
-                Err(postcard::Error::SerdeSerCustom)
-            }
-            Ok(()) => Ok(()),
-        }
-    }
-
-    pub fn cursor(&mut self, offset: u32) -> Cursor {
-        Cursor {
-            offset,
-            flash: self,
-        }
-    }
-}
-
-pub struct Cursor<'a> {
-    flash: &'a mut Flash,
-    offset: u32,
 }
 
 #[derive(Debug)]
@@ -150,14 +200,56 @@ impl embedded_io::Error for EmbeddedFlashError {
     }
 }
 
-impl<'a> embedded_io::ErrorType for Cursor<'a> {
-    type Error = EmbeddedFlashError;
-}
-
-impl<'a> embedded_io::Read for Cursor<'a> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, EmbeddedFlashError> {
-        self.flash.flash.blocking_read(self.offset, buf)?;
-        self.offset += buf.len() as u32;
-        Ok(buf.len())
+pub async fn config_command(args: &[&str]) {
+    match args {
+        ["config", "format"] => {
+            let mut config = CONFIG.get().lock().await;
+            let result = config.format().await;
+            print!("{result:?}");
+        }
+        ["config", "list"] => {
+            let mut config = CONFIG.get().lock().await;
+            match config.get_all().await {
+                Ok(map) => {
+                    for (k, v) in &map {
+                        print!("{k}={v}\r\n");
+                    }
+                }
+                Err(err) => {
+                    print!("{err:?}\r\n");
+                }
+            }
+        }
+        ["config", "get", key] => {
+            let mut config = CONFIG.get().lock().await;
+            let value = config.fetch(key).await;
+            print!("{value:?}\r\n");
+        }
+        ["config", "rm", key] => {
+            let mut config = CONFIG.get().lock().await;
+            let result = config.remove(key).await;
+            print!("{result:?}\r\n");
+        }
+        ["config", "set", key, value] => {
+            let value: StrValue = match (*value).try_into() {
+                Ok(v) => v,
+                Err(err) => {
+                    print!("value `{value}`: {err:?}\r\n");
+                    return;
+                }
+            };
+            let mut config = CONFIG.get().lock().await;
+            match config.store(key, value).await {
+                Ok(()) => {
+                    print!("OK\r\n");
+                }
+                Err(err) => {
+                    print!("{err:?}\r\n");
+                }
+            }
+        }
+        _ => {
+            print!("invalid arguments\r\n");
+        }
     }
 }
