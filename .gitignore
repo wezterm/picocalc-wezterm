@@ -3,3 +3,4 @@
 **/firmware
 **/result
 **/target
+*.uf2
