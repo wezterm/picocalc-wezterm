@@ -11,6 +11,8 @@ use embedded_graphics::primitives::*;
 use embedded_graphics::text::Text;
 use vtparse::{CsiParam, VTActor, VTParser};
 
+extern crate alloc;
+
 static FONTS: &[&MonoFont] = &[
     &profont::PROFONT_7_POINT,
     &profont::PROFONT_9_POINT,
@@ -357,6 +359,10 @@ impl VTActor for ScreenModel {
     }
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
         log::info!("osc: {params:?}");
+    }
+
+    fn apc_dispatch(&mut self, data: alloc::vec::Vec<u8>) {
+        log::info!("apc: {data:x?}");
     }
 }
 
