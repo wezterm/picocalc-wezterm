@@ -1,5 +1,5 @@
 use crate::keyboard::{Key, KeyReport, KeyState, Modifiers};
-use crate::process::SHELL;
+use crate::process::current_proc;
 use crate::{Irqs, mk_static, static_bytes};
 use core::fmt::Write as _;
 use embassy_executor::Spawner;
@@ -179,7 +179,7 @@ async fn uart_reader(mut rx: BufferedUartRx<'static, UART0>) {
     loop {
         let mut buf = [0; 31];
         if let Ok(n) = rx.read(&mut buf).await {
-            let shell = SHELL.get();
+            let proc = current_proc();
             match core::str::from_utf8(&buf[0..n]) {
                 Ok(s) => {
                     for c in s.chars() {
@@ -187,26 +187,25 @@ async fn uart_reader(mut rx: BufferedUartRx<'static, UART0>) {
                             continue;
                         }
                         log::debug!("UART: char {c:?}");
-                        shell
-                            .key_input(KeyReport {
-                                state: KeyState::Pressed,
-                                key: match c {
-                                    '\n' => Key::Enter,
-                                    '\u{7f}' => Key::BackSpace,
-                                    '\t' => Key::Tab,
-                                    '\u{1b}' => Key::Escape,
-                                    c => Key::Char(c),
-                                },
-                                modifiers: Modifiers::NONE,
-                            })
-                            .await;
+                        proc.key_input(KeyReport {
+                            state: KeyState::Pressed,
+                            key: match c {
+                                '\n' => Key::Enter,
+                                '\u{7f}' => Key::BackSpace,
+                                '\t' => Key::Tab,
+                                '\u{1b}' => Key::Escape,
+                                c => Key::Char(c),
+                            },
+                            modifiers: Modifiers::NONE,
+                        })
+                        .await;
                     }
                 }
                 Err(e) => {
                     log::info!("not utf8: {e:?} {:x?}", &buf[0..n]);
                 }
             }
-            shell.render().await;
+            proc.render().await;
         }
     }
 }

@@ -6,6 +6,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use embassy_sync::blocking_mutex::CriticalSectionMutex;
@@ -17,11 +18,21 @@ pub type Mutex<T> = embassy_sync::mutex::Mutex<CriticalSectionRawMutex, T>;
 pub type ProcHandle = Arc<dyn Process + Send + Sync>;
 
 pub static SHELL: LazyLock<ProcHandle> = LazyLock::new(LocalShell::new);
-static CURRENT: LazyLock<CriticalSectionMutex<Arc<dyn Process + Send + Sync>>> =
-    LazyLock::new(|| CriticalSectionMutex::new(Arc::clone(SHELL.get())));
+static CURRENT: LazyLock<CriticalSectionMutex<RefCell<Arc<dyn Process + Send + Sync>>>> =
+    LazyLock::new(|| CriticalSectionMutex::new(RefCell::new(Arc::clone(SHELL.get()))));
+
+pub async fn assign_proc(proc: ProcHandle) -> ProcHandle {
+    let prior = CURRENT
+        .get()
+        .lock(|current| core::mem::replace(&mut *current.borrow_mut(), proc.clone()));
+
+    prior.un_prompt(&mut *SCREEN.get().lock().await);
+    proc.render().await;
+    prior
+}
 
 pub fn current_proc() -> ProcHandle {
-    CURRENT.get().lock(Arc::clone)
+    CURRENT.get().lock(|cell| Arc::clone(&*cell.borrow()))
 }
 
 #[async_trait::async_trait]

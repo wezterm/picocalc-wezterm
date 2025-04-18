@@ -1,4 +1,4 @@
-use crate::process::SHELL;
+use crate::process::current_proc;
 use crate::screen::SCREEN;
 use core::fmt::Formatter;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -352,9 +352,9 @@ pub async fn keyboard_reader(
                         SCREEN.get().lock().await.decrease_font();
                     }
                     _ => {
-                        let shell = SHELL.get();
-                        shell.key_input(key).await;
-                        shell.render().await;
+                        let proc = current_proc();
+                        proc.key_input(key).await;
+                        proc.render().await;
                     }
                 }
             }
