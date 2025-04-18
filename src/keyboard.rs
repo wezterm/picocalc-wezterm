@@ -378,10 +378,10 @@ impl core::fmt::Display for BatteryStatus {
     fn fmt(&self, fmt: &mut Formatter) -> core::fmt::Result {
         let pct = self.percentage();
         let charging = self.is_charging();
-        if charging {
-            write!(fmt, "{pct}% (charging)")
-        } else {
-            write!(fmt, "{pct}%")
+        match (charging, pct) {
+            (true, 0x7f) => write!(fmt, "not present"),
+            (true, pct) => write!(fmt, "{pct}% (charging)"),
+            (false, pct) => write!(fmt, "{pct}%"),
         }
     }
 }
