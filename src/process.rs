@@ -8,7 +8,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Write;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use embassy_sync::blocking_mutex::CriticalSectionMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
@@ -20,6 +19,23 @@ pub type ProcHandle = Arc<dyn Process + Send + Sync>;
 pub static SHELL: LazyLock<ProcHandle> = LazyLock::new(LocalShell::new);
 static CURRENT: LazyLock<CriticalSectionMutex<RefCell<Arc<dyn Process + Send + Sync>>>> =
     LazyLock::new(|| CriticalSectionMutex::new(RefCell::new(Arc::clone(SHELL.get()))));
+
+pub async fn assign_proc_if(
+    proc: ProcHandle,
+    func: impl FnOnce(&ProcHandle) -> bool,
+) -> Option<ProcHandle> {
+    let prior = CURRENT.get().lock(|current| {
+        if (func)(&current.borrow()) {
+            Some(core::mem::replace(&mut *current.borrow_mut(), proc.clone()))
+        } else {
+            None
+        }
+    })?;
+
+    prior.un_prompt(&mut *SCREEN.get().lock().await);
+    proc.render().await;
+    Some(prior)
+}
 
 pub async fn assign_proc(proc: ProcHandle) -> ProcHandle {
     let prior = CURRENT
@@ -44,16 +60,56 @@ pub trait Process {
     fn un_prompt(&self, _screen: &mut Screen) {}
 }
 
+#[derive(Default)]
+pub struct LineEditor {
+    command: String,
+    cursor_x: usize,
+}
+
+impl LineEditor {
+    pub fn apply_key(&mut self, key: KeyReport) -> Option<String> {
+        if key.state != KeyState::Pressed {
+            return None;
+        }
+        match key.key {
+            Key::Char(c) => {
+                self.command.insert(self.cursor_x, c);
+                self.cursor_x += 1;
+            }
+            Key::BackSpace => {
+                if self.cursor_x == self.command.len() {
+                    self.command.pop();
+                    self.cursor_x = self.cursor_x.saturating_sub(1);
+                } else {
+                    self.command.remove(self.cursor_x);
+                }
+            }
+            Key::Enter => {
+                let cmd = self.command.clone();
+                self.command.clear();
+                self.cursor_x = 0;
+
+                return Some(cmd);
+            }
+            _ => {}
+        };
+
+        None
+    }
+
+    pub fn input(&self) -> &str {
+        &self.command
+    }
+}
+
 pub struct LocalShell {
-    command: Mutex<String>,
-    cursor_x: AtomicUsize,
+    command: Mutex<LineEditor>,
 }
 
 impl LocalShell {
     pub fn new() -> ProcHandle {
         Arc::new(Self {
-            command: Mutex::new(String::new()),
-            cursor_x: AtomicUsize::new(0),
+            command: Mutex::new(LineEditor::default()),
         })
     }
 
@@ -84,7 +140,7 @@ impl Process for LocalShell {
     async fn render(&self) {
         let mut screen = SCREEN.get().lock().await;
         let command = self.command.lock().await;
-        write!(screen, "\r$ {}\u{1b}[K", command.as_str()).ok();
+        write!(screen, "\r$ {}\u{1b}[K", command.command.as_str()).ok();
     }
 
     fn un_prompt(&self, screen: &mut Screen) {
@@ -95,33 +151,18 @@ impl Process for LocalShell {
         if key.state != KeyState::Pressed {
             return;
         }
-        let mut command = self.command.lock().await;
-        match key.key {
-            Key::Char(c) => {
-                let cursor = self.cursor_x.load(Ordering::SeqCst);
-                command.insert(cursor, c);
-                self.cursor_x.store(cursor + 1, Ordering::SeqCst);
-            }
-            Key::BackSpace => {
-                let cursor = self.cursor_x.load(Ordering::SeqCst);
-                if cursor == command.len() {
-                    command.pop();
-                    self.cursor_x
-                        .store(cursor.saturating_sub(1), Ordering::SeqCst);
-                } else {
-                    command.remove(cursor);
-                }
-            }
-            Key::Enter => {
-                let cmd = command.clone();
-                command.clear();
-                self.cursor_x.store(0, Ordering::SeqCst);
-                drop(command);
 
-                write!(SCREEN.get().lock().await, "\r\n").ok();
-                self.dispatch_command(&cmd).await;
-            }
-            _ => {}
+        // Take care with the scoping, as the write! call
+        // below can call through to un_prompt and render
+        // and attempt to acquire self.command.lock()
+        let command = {
+            let mut cmd = self.command.lock().await;
+            cmd.apply_key(key)
+        };
+
+        if let Some(command) = command {
+            write!(SCREEN.get().lock().await, "\r\n").ok();
+            self.dispatch_command(&command).await;
         }
     }
 }

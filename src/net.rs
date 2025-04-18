@@ -1,7 +1,7 @@
 use crate::config::CONFIG;
 use crate::keyboard::{Key, KeyReport, KeyState};
 use crate::net::alloc::string::ToString;
-use crate::process::{Process, assign_proc};
+use crate::process::{LineEditor, Process, assign_proc, assign_proc_if};
 use crate::rng::WezTermRng;
 use crate::screen::{SCREEN, Screen};
 use crate::{Irqs, SCREEN_HEIGHT, SCREEN_WIDTH};
@@ -24,6 +24,7 @@ use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex;
 use embedded_io_async::{Read, Write as _};
 use rand_core::RngCore;
+use scope_guard::scope_guard;
 use static_cell::StaticCell;
 use sunset::{CliEvent, SessionCommand};
 use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
@@ -238,20 +239,23 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                     };
 
                     let session_authd_chan =
-                        embassy_sync::channel::Channel::<NoopRawMutex, (), 1>::new();
+                        embassy_sync::channel::Channel::<NoopRawMutex, bool, 1>::new();
                     let wait_for_auth = session_authd_chan.receiver();
 
                     let spawn_session_future = async {
-                        let _ = wait_for_auth.receive().await;
-                        let channel = ssh_client.open_session_pty().await?;
-                        ssh_channel_task(channel, key_channel).await;
+                        if wait_for_auth.receive().await {
+                            let channel = ssh_client.open_session_pty().await?;
+                            ssh_channel_task(channel, key_channel).await;
+                        }
                         Ok::<(), sunset::Error>(())
                     };
 
                     let runner = ssh_client.run(&mut read, &mut write);
                     let mut progress = ProgressHolder::new();
-                    let ssh_pw = CONFIG.get().lock().await.fetch("ssh_pw").await;
                     let ssh_ticker = async {
+                        scope_guard!(|| {
+                            session_authd_chan.sender().try_send(false).ok();
+                        });
                         loop {
                             match ssh_client.progress(&mut progress).await {
                                 Ok(event) => match event {
@@ -265,12 +269,37 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                                         }
                                     }
                                     CliEvent::Username(req) => {
-                                        req.username("wez").expect("set user");
+                                        match CONFIG.get().lock().await.fetch("ssh_user").await {
+                                            Ok(Some(pw)) => req.username(&pw),
+                                            _ => {
+                                                let user =
+                                                    prompt_for_input("login: ", PromptKind::Text)
+                                                        .await;
+                                                match user {
+                                                    Some(user) => req.username(&user),
+                                                    None => {
+                                                        print!("Cancelled\r\n");
+                                                        return Ok(());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        .expect("set user");
                                     }
                                     CliEvent::Password(req) => {
-                                        match &ssh_pw {
+                                        match CONFIG.get().lock().await.fetch("ssh_pw").await {
                                             Ok(Some(pw)) => req.password(&pw),
-                                            _ => req.skip(),
+                                            _ => {
+                                                let user = prompt_for_input(
+                                                    "password: ",
+                                                    PromptKind::Password,
+                                                )
+                                                .await;
+                                                match user {
+                                                    Some(user) => req.password(&user),
+                                                    None => req.skip(),
+                                                }
+                                            }
                                         }
                                         .expect("set pw");
                                     }
@@ -282,7 +311,7 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                                     }
                                     CliEvent::Authenticated => {
                                         log::info!("Authenticated!");
-                                        session_authd_chan.sender().send(()).await;
+                                        session_authd_chan.sender().send(true).await;
                                     }
                                     CliEvent::SessionOpened(mut s) => {
                                         log::info!("session opened channel {}", s.channel());
@@ -362,6 +391,82 @@ async fn ssh_session_task(host: String, command: Option<String>) {
             print!("failed to resolve {host}: {err:?}\r\n");
         }
     }
+}
+
+#[derive(Copy, Clone)]
+enum PromptKind {
+    Text,
+    Password,
+}
+
+async fn prompt_for_input(prompt: &str, kind: PromptKind) -> Option<String> {
+    use crate::process::{Mutex, ProcHandle};
+    use core::fmt::Write;
+
+    let channel = Arc::new(Channel::<CS, Option<String>, 1>::new());
+
+    struct PromptProc {
+        prompt: String,
+        input: Mutex<LineEditor>,
+        channel: Arc<Channel<CS, Option<String>, 1>>,
+        kind: PromptKind,
+    }
+
+    impl Drop for PromptProc {
+        fn drop(&mut self) {
+            self.channel.try_send(None).ok();
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Process for PromptProc {
+        async fn render(&self) {
+            let mut screen = SCREEN.get().lock().await;
+            match self.kind {
+                PromptKind::Text => {
+                    let input = self.input.lock().await;
+                    write!(screen, "\r{} {}\u{1b}[K", self.prompt, input.input()).ok();
+                }
+                PromptKind::Password => {
+                    write!(screen, "\r{}\u{1b}[K", self.prompt).ok();
+                }
+            }
+        }
+
+        fn un_prompt(&self, screen: &mut Screen) {
+            write!(screen, "\r\u{1b}[K").ok();
+        }
+
+        async fn key_input(&self, key: KeyReport) {
+            if key.state != KeyState::Pressed {
+                return;
+            }
+            use crate::keyboard::Modifiers;
+            match (key.modifiers, key.key) {
+                (Modifiers::CTRL, Key::Char('c' | 'C' | 'd' | 'D')) | (_, Key::Escape) => {
+                    self.channel.send(None).await;
+                }
+                _ => {
+                    if let Some(command) = self.input.lock().await.apply_key(key) {
+                        write!(SCREEN.get().lock().await, "\r\n").ok();
+                        self.channel.send(Some(command)).await;
+                    }
+                }
+            }
+        }
+    }
+
+    let prompt_proc: ProcHandle = Arc::new(PromptProc {
+        prompt: prompt.to_string(),
+        input: Mutex::new(LineEditor::default()),
+        channel: channel.clone(),
+        kind,
+    });
+
+    let prior = assign_proc(prompt_proc.clone()).await;
+    let response = channel.receive().await;
+    let _ = assign_proc_if(prior, |current| Arc::ptr_eq(current, &prompt_proc)).await;
+    response
 }
 
 pub async fn ssh_command(args: &[&str]) {
