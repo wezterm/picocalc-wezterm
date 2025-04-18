@@ -186,7 +186,7 @@ async fn uart_reader(mut rx: BufferedUartRx<'static, UART0>) {
                         if c == '\r' {
                             continue;
                         }
-                        log::info!("UART: char {c:?}");
+                        log::debug!("UART: char {c:?}");
                         shell
                             .key_input(KeyReport {
                                 state: KeyState::Pressed,

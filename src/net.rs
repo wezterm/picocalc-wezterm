@@ -1,9 +1,8 @@
-use crate::net::alloc::string::ToString;
-extern crate alloc;
 use crate::config::CONFIG;
+use crate::net::alloc::string::ToString;
 use crate::rng::WezTermRng;
 use crate::screen::SCREEN;
-use crate::{Irqs, SCREEN_HEIGHT, SCREEN_WIDTH, mk_static, static_bytes};
+use crate::{Irqs, SCREEN_HEIGHT, SCREEN_WIDTH};
 use alloc::string::String;
 use core::fmt::Write;
 use cyw43::Control;
@@ -18,12 +17,13 @@ use embassy_rp::pio::Pio;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Timer};
 use embedded_io_async::Read;
 use rand_core::RngCore;
 use static_cell::StaticCell;
 use sunset::{CliEvent, SessionCommand};
 use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
+
+extern crate alloc;
 
 static WIFI_CONTROL: LazyLock<Mutex<CriticalSectionRawMutex, Option<Control<'static>>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -125,59 +125,31 @@ pub async fn setup_wifi(
     STACK.get().lock().await.replace(stack);
 }
 
-#[embassy_executor::task]
-async fn ssh_channel_task(mut channel: ChanInOut<'static, 'static>) {
-    /*
-    let winch = {
-        let screen = SCREEN.get().lock().await;
-        let rows = screen.height;
-        let cols = screen.width;
-        sunset::packets::WinChange {
-            rows: rows.into(),
-            cols: cols.into(),
-            width: SCREEN_WIDTH as u32,
-            height: SCREEN_HEIGHT as u32,
-        }
-    };
-    log::info!("sending window size {winch:?}");
-    if let Err(err) = channel.term_window_change(winch).await {
-        log::error!("winch failed: {err:?}");
-    }
-
-    log::info!("sending uname command");
-    if let Err(err) = channel.write_all("uname -a\r\n".as_bytes()).await {
-        log::error!("error sending command: {err:?}");
-    }
-    */
-
+async fn ssh_channel_task(mut channel: ChanInOut<'_, '_>) {
     log::info!("ssh_channel_task waiting for output");
     loop {
         let mut buf = [0u8; 1024];
         match channel.read(&mut buf).await {
             Ok(n) => {
                 if n == 0 {
-                    log::warn!("EOF on ssh channel");
-                    break;
+                    log::warn!("ssh_channel_task: EOF on ssh channel");
+                    return;
                 }
                 match core::str::from_utf8(&buf[0..n]) {
                     Ok(s) => {
-                        log::info!("{s}");
+                        log::info!("ssh_channel_task: {s}");
                         write!(SCREEN.get().lock().await, "{s}").ok();
                     }
                     Err(err) => {
-                        log::error!("failed utf8: {err:?}");
+                        log::error!("ssh_channel_task: failed utf8: {err:?}");
                     }
                 }
             }
             Err(err) => {
-                log::error!("failed read: {err:?}");
-                break;
+                print!("\u{1b}[1mssh_channel_task: {err:?}\r\n");
+                return;
             }
         }
-    }
-
-    loop {
-        Timer::after(Duration::from_millis(1000)).await;
     }
 }
 
@@ -195,7 +167,9 @@ async fn ssh_session_task(host: String, command: Option<String>) {
     match dns_client.query(&host, DnsQueryType::A).await {
         Ok(addrs) => {
             log::info!("{host} -> {addrs:?}");
-            let mut tcp_socket = TcpSocket::new(stack, static_bytes!(8192), static_bytes!(8192));
+            let mut socket_tx_buf = [0u8; 8192];
+            let mut socket_rx_buf = [0u8; 8192];
+            let mut tcp_socket = TcpSocket::new(stack, &mut socket_tx_buf, &mut socket_rx_buf);
 
             match tcp_socket
                 .connect(IpEndpoint {
@@ -205,20 +179,19 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                 .await
             {
                 Ok(()) => {
-                    use embassy_futures::join::join;
-                    log::info!("Connected to port 22!");
-                    write!(
-                        SCREEN.get().lock().await,
-                        "Connected to {host} {}:22\r\n",
-                        addrs[0]
-                    )
-                    .ok();
+                    use embassy_futures::join::*;
+                    use embassy_futures::select::*;
+                    print!("Connected to {host} {}:22\r\n", addrs[0]);
                     let (mut read, mut write) = tcp_socket.split();
-                    let ssh_client = mk_static!(
-                        SSHClient,
-                        SSHClient::new(static_bytes!(8192), static_bytes!(8192))
-                            .expect("SSHClient::new")
-                    );
+                    let mut ssh_tx_buf = [0u8; 8192];
+                    let mut ssh_rx_buf = [0u8; 8192];
+                    let ssh_client = match SSHClient::new(&mut ssh_tx_buf, &mut ssh_rx_buf) {
+                        Ok(client) => client,
+                        Err(err) => {
+                            print!("SSHClient::new: {err:?}\r\n");
+                            return;
+                        }
+                    };
 
                     let session_authd_chan =
                         embassy_sync::channel::Channel::<NoopRawMutex, (), 1>::new();
@@ -226,13 +199,9 @@ async fn ssh_session_task(host: String, command: Option<String>) {
 
                     let spawn_session_future = async {
                         let _ = wait_for_auth.receive().await;
-
-                        log::info!("try open pty");
-                        let channel = ssh_client.open_session_pty().await.expect("openpty failed");
-                        log::info!("pty opened, spawn client task");
-                        Spawner::for_current_executor()
-                            .await
-                            .must_spawn(ssh_channel_task(channel));
+                        let channel = ssh_client.open_session_pty().await?;
+                        ssh_channel_task(channel).await;
+                        Ok::<(), sunset::Error>(())
                     };
 
                     let runner = ssh_client.run(&mut read, &mut write);
@@ -292,18 +261,21 @@ async fn ssh_session_task(host: String, command: Option<String>) {
 
                                         log::info!("requesting pty {pty:?}");
                                         if let Err(err) = s.pty(pty) {
-                                            log::error!("requesting pty failed {err:?}");
+                                            print!("requesting pty failed {err:?}\r\n");
+                                            return Err(err);
                                         }
                                         log::info!("setting command");
                                         write!(SCREEN.get().lock().await, "execute {command}\r\n")
                                             .ok();
                                         if let Err(err) = s.cmd(&SessionCommand::Exec(&command)) {
-                                            log::error!("command failed: {err:?}");
+                                            print!("command failed: {err:?}\r\n");
+                                            return Err(err);
                                         }
                                         log::info!("SessionOpened completed");
                                     }
                                     CliEvent::SessionExit(x) => {
                                         log::info!("session exit with {x:?}");
+                                        break;
                                     }
                                     CliEvent::Defunct => {
                                         log::error!("ssh session terminated");
@@ -311,25 +283,25 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                                     }
                                 },
                                 Err(err) => {
-                                    log::error!("ssh progress error: {err:?}");
-                                    break;
+                                    print!("ssh progress error: {err:?}\r\n");
+                                    return Err(err);
                                 }
                             }
                         }
 
-                        Ok::<(), ()>(())
+                        Ok::<(), sunset::Error>(())
                     };
 
-                    let res = join(runner, join(ssh_ticker, spawn_session_future)).await;
+                    let res = select(runner, join(ssh_ticker, spawn_session_future)).await;
                     log::info!("ssh result is {res:?}");
                 }
                 Err(err) => {
-                    log::error!("failed to connect to port 22: {err:?}");
+                    print!("failed to connect to port 22: {err:?}\r\n");
                 }
             }
         }
         Err(err) => {
-            log::error!("failed foo.lan: {err:?}");
+            print!("failed to resolve {host}: {err:?}\r\n");
         }
     }
 }
@@ -356,7 +328,7 @@ pub async fn ssh_command(args: &[&str]) {
         return;
     }
 
-    print!("Usage: ssh [hostname]\r\n");
+    print!("Usage: ssh [hostname] [command]\r\n");
 }
 
 /*
