@@ -1,4 +1,4 @@
-use crate::{PicoCalcDisplay, SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::PicoCalcDisplay;
 use core::ops::{Deref, DerefMut};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
@@ -12,6 +12,9 @@ use embedded_graphics::text::Text;
 use vtparse::{CsiParam, VTActor, VTParser};
 
 extern crate alloc;
+
+pub const SCREEN_HEIGHT: u16 = 320;
+pub const SCREEN_WIDTH: u16 = 320;
 
 static FONTS: &[&MonoFont] = &[
     &profont::PROFONT_7_POINT,

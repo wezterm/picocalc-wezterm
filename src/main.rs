@@ -76,8 +76,6 @@ mod screen;
 mod storage;
 mod time;
 
-const SCREEN_HEIGHT: u16 = 320;
-const SCREEN_WIDTH: u16 = 320;
 const MAX_SPI_FREQ: u32 = 62_500_000;
 
 #[unsafe(link_section = ".start_block")]

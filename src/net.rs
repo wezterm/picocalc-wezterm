@@ -1,10 +1,10 @@
+use crate::Irqs;
 use crate::config::CONFIG;
 use crate::keyboard::{Key, KeyReport, KeyState};
 use crate::net::alloc::string::ToString;
 use crate::process::{LineEditor, Process, assign_proc, assign_proc_if};
 use crate::rng::WezTermRng;
-use crate::screen::{SCREEN, Screen};
-use crate::{Irqs, SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::screen::{SCREEN, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
