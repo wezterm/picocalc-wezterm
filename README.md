@@ -3,7 +3,7 @@
 This is an implementation of an ssh client and terminal emulator that runs on a
 [Raspberry Pi Pico 2
 W](https://www.raspberrypi.com/products/raspberry-pi-pico-2/) installed in a
-[PicoCalc](https://www.clockworkpi.com/picocalc)>
+[PicoCalc](https://www.clockworkpi.com/picocalc).
 
 This project is a bit of a toy, but it's a fun one to hack on!
 
@@ -99,6 +99,12 @@ Operates on the config section of flash storage. This is 8KiB in size.
  * `config get KEY` - shows the value of `KEY`
  * `config rm KEY` - marks `KEY` as removed
  * `config set KEY VALUE` - assigns `KEY=VALUE`
+
+> [!CAUTION]
+> Please note that the config storage is clear-text data held
+> in a region of the flash memory on the device. If someone
+> has your device, it is possible to extract any credentials
+> from it simply by booting it up and running `config list`.
 
 ### free
 
