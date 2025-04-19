@@ -32,3 +32,14 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         path: "wezterm-*.uf2"
+    - name: zip for dev release
+      # Use a singular (non-version-dependent) name so that we don't need to
+      # wrange retention processing in the release
+      run: 7z a -tzip wezterm-picocalc.zip wezterm-*.uf2
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v2
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      with:
+        tag_name: dev
+        files: |
+          wezterm-picocalc.zip
