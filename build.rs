@@ -31,4 +31,23 @@ fn main() {
 
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
+
+    let mut ci_tag = "unknown".to_string();
+
+    if let Ok(output) = std::process::Command::new("git")
+        .args(&[
+            "-c",
+            "core.abbrev=8",
+            "show",
+            "-s",
+            "--format=%cd-%h",
+            "--date=format:%Y%m%d",
+        ])
+        .output()
+    {
+        let info = String::from_utf8_lossy(&output.stdout);
+        ci_tag = info.trim().to_string();
+    }
+
+    println!("cargo:rustc-env=WEZTERM_CI_TAG={}", ci_tag);
 }

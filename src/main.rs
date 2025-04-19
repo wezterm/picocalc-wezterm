@@ -89,7 +89,11 @@ pub static IMAGE_DEF: ImageDef = ImageDef::secure_exe();
 pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
     embassy_rp::binary_info::rp_program_name!(c"WezTerm"),
     embassy_rp::binary_info::rp_program_description!(c"Hardware WezTerm"),
-    embassy_rp::binary_info::rp_cargo_version!(),
+    embassy_rp::binary_info::env!(
+        embassy_rp::binary_info::consts::TAG_RASPBERRY_PI,
+        embassy_rp::binary_info::consts::ID_RP_PROGRAM_VERSION_STRING,
+        "WEZTERM_CI_TAG"
+    ),
     embassy_rp::binary_info::rp_program_build_attribute!(),
 ];
 
@@ -153,10 +157,7 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    print!(
-        "\u{1b}[35mWezTerm {}\u{1b}[0m\r\n",
-        env!("CARGO_PKG_VERSION")
-    );
+    print!("\u{1b}[35mWezTerm {}\u{1b}[0m\r\n", env!("WEZTERM_CI_TAG"));
 
     if let Some(msg) = panic_persist::get_panic_message_utf8() {
         // Give serial a chance to be ready to capture this info
