@@ -24,7 +24,6 @@ use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex;
 use embedded_io_async::{Read, Write as _};
 use rand_core::RngCore;
-use scope_guard::scope_guard;
 use static_cell::StaticCell;
 use sunset::{CliEvent, SessionCommand};
 use sunset_embassy::{ChanInOut, ProgressHolder, SSHClient};
@@ -253,9 +252,6 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                     let runner = ssh_client.run(&mut read, &mut write);
                     let mut progress = ProgressHolder::new();
                     let ssh_ticker = async {
-                        scope_guard!(|| {
-                            session_authd_chan.sender().try_send(false).ok();
-                        });
                         loop {
                             match ssh_client.progress(&mut progress).await {
                                 Ok(event) => match event {
