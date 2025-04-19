@@ -56,6 +56,8 @@ pub trait Process {
     async fn key_input(&self, key: KeyReport);
     async fn render(&self);
 
+    fn name(&self) -> &str;
+
     // Erase whatever prompt may have been printed
     fn un_prompt(&self, _screen: &mut Screen) {}
 }
@@ -137,6 +139,9 @@ impl LocalShell {
 
 #[async_trait::async_trait(?Send)]
 impl Process for LocalShell {
+    fn name(&self) -> &str {
+        "shell"
+    }
     async fn render(&self) {
         let mut screen = SCREEN.get().lock().await;
         let command = self.command.lock().await;

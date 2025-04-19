@@ -1,6 +1,6 @@
 use crate::Irqs;
 use crate::config::CONFIG;
-use crate::keyboard::{Key, KeyReport, KeyState};
+use crate::keyboard::{Key, KeyReport, KeyState, Modifiers};
 use crate::net::alloc::string::ToString;
 use crate::process::{LineEditor, Process, assign_proc, assign_proc_if};
 use crate::rng::WezTermRng;
@@ -22,6 +22,7 @@ use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel::Channel;
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex;
+use embassy_time::{Duration, with_timeout};
 use embedded_io_async::{Read, Write as _};
 use rand_core::RngCore;
 use static_cell::StaticCell;
@@ -141,8 +142,11 @@ pub async fn setup_wifi(
     STACK.get().lock().await.replace(stack);
 }
 
+const TIMEOUT_DURATION: Duration = Duration::from_secs(10);
+
 async fn ssh_channel_task(mut channel: ChanInOut<'_, '_>, key_rx: Arc<Channel<CS, KeyReport, 4>>) {
     log::info!("ssh_channel_task waiting for output");
+
     loop {
         let mut buf = [0u8; 1024];
 
@@ -166,24 +170,73 @@ async fn ssh_channel_task(mut channel: ChanInOut<'_, '_>, key_rx: Arc<Channel<CS
             Either::Second(key_report) => {
                 // Encode a key with xterm style keyboard encoding.
                 // FIXME: woefully incomplete!
+
+                if key_report.modifiers == Modifiers::CTRL {
+                    if let Key::Char(c) = key_report.key {
+                        if let Some(mapped) = ctrl_mapping(c) {
+                            log::info!(
+                                "doing mapped ctrl {} -> {}",
+                                c.escape_debug(),
+                                mapped.escape_debug()
+                            );
+                            let mut buf = [0u8; 4];
+                            log::info!(
+                                "{:?}",
+                                with_timeout(
+                                    TIMEOUT_DURATION,
+                                    channel.write_all(mapped.encode_utf8(&mut buf).as_bytes()),
+                                )
+                                .await
+                            );
+                            continue;
+                        }
+                    }
+                }
+
+                if key_report.modifiers == Modifiers::ALT {
+                    // Alt sends escape first
+                    log::info!("ALT -> send escape first");
+                    log::info!(
+                        "{:?}",
+                        with_timeout(TIMEOUT_DURATION, channel.write_all(b"\x1b")).await
+                    );
+                }
+
                 if let Key::Char(c) = key_report.key {
                     let mut buf = [0u8; 4];
-                    channel
-                        .write_all(c.encode_utf8(&mut buf).as_bytes())
+                    log::info!("just sending {} as-is", c.escape_debug());
+                    log::info!(
+                        "{:?}",
+                        with_timeout(
+                            TIMEOUT_DURATION,
+                            channel.write_all(c.encode_utf8(&mut buf).as_bytes()),
+                        )
                         .await
-                        .ok();
+                    );
                 } else {
                     let text = match key_report.key {
                         Key::Enter => "\n",
                         Key::BackSpace => "\u{7f}",
                         Key::Tab => "\t",
                         Key::Escape => "\u{1b}",
+                        Key::Up => "\u{1b}[A",
+                        Key::Down => "\u{1b}[B",
+                        Key::Right => "\u{1b}[C",
+                        Key::Left => "\u{1b}[D",
+                        Key::Home => "\u{1b}[H",
+                        Key::End => "\u{1b}[F",
+                        Key::PageUp => "\u{1b}[5~",
+                        Key::PageDown => "\u{1b}[6~",
                         Key::None | Key::Char(_) => continue,
                         _ => {
                             continue;
                         }
                     };
-                    channel.write_all(text.as_bytes()).await.ok();
+                    log::info!("{key_report:?} -> {}", text.escape_debug());
+                    log::info!(
+                        "{:?}",
+                        with_timeout(TIMEOUT_DURATION, channel.write_all(text.as_bytes())).await
+                    );
                 }
             }
         }
@@ -216,7 +269,6 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                 .await
             {
                 Ok(()) => {
-                    use embassy_futures::join::*;
                     use embassy_futures::select::*;
 
                     let key_channel = Arc::new(Channel::new());
@@ -374,7 +426,7 @@ async fn ssh_session_task(host: String, command: Option<String>) {
                         Ok::<(), sunset::Error>(())
                     };
 
-                    let res = select(runner, join(ssh_ticker, spawn_session_future)).await;
+                    let res = select(runner, select(ssh_ticker, spawn_session_future)).await;
                     log::info!("ssh result is {res:?}");
                     assign_proc(prior_proc).await;
                 }
@@ -416,6 +468,9 @@ async fn prompt_for_input(prompt: &str, kind: PromptKind) -> Option<String> {
 
     #[async_trait::async_trait(?Send)]
     impl Process for PromptProc {
+        fn name(&self) -> &str {
+            "prompt"
+        }
         async fn render(&self) {
             let mut screen = SCREEN.get().lock().await;
             match self.kind {
@@ -496,6 +551,9 @@ struct SshProcess {
 
 #[async_trait::async_trait(?Send)]
 impl Process for SshProcess {
+    fn name(&self) -> &str {
+        "ssh"
+    }
     async fn render(&self) {}
     fn un_prompt(&self, _screen: &mut Screen) {}
     async fn key_input(&self, key: KeyReport) {
@@ -534,3 +592,51 @@ async fn wifi_scanner(mut control: Control<'static>) {
     }
 }
 */
+
+/// Taken from wezterm-input-types
+/// Map c to its Ctrl equivalent.
+/// In theory, this mapping is simply translating alpha characters
+/// to upper case and then masking them by 0x1f, but xterm inherits
+/// some built-in translation from legacy X11 so that are some
+/// aliased mappings and a couple that might be technically tied
+/// to US keyboard layout (particularly the punctuation characters
+/// produced in combination with SHIFT) that may not be 100%
+/// the right thing to do here for users with non-US layouts.
+fn ctrl_mapping(c: char) -> Option<char> {
+    Some(match c {
+        '@' | '`' | ' ' | '2' => '\x00',
+        'A' | 'a' => '\x01',
+        'B' | 'b' => '\x02',
+        'C' | 'c' => '\x03',
+        'D' | 'd' => '\x04',
+        'E' | 'e' => '\x05',
+        'F' | 'f' => '\x06',
+        'G' | 'g' => '\x07',
+        'H' | 'h' => '\x08',
+        'I' | 'i' => '\x09',
+        'J' | 'j' => '\x0a',
+        'K' | 'k' => '\x0b',
+        'L' | 'l' => '\x0c',
+        'M' | 'm' => '\x0d',
+        'N' | 'n' => '\x0e',
+        'O' | 'o' => '\x0f',
+        'P' | 'p' => '\x10',
+        'Q' | 'q' => '\x11',
+        'R' | 'r' => '\x12',
+        'S' | 's' => '\x13',
+        'T' | 't' => '\x14',
+        'U' | 'u' => '\x15',
+        'V' | 'v' => '\x16',
+        'W' | 'w' => '\x17',
+        'X' | 'x' => '\x18',
+        'Y' | 'y' => '\x19',
+        'Z' | 'z' => '\x1a',
+        '[' | '3' | '{' => '\x1b',
+        '\\' | '4' | '|' => '\x1c',
+        ']' | '5' | '}' => '\x1d',
+        '^' | '6' | '~' => '\x1e',
+        '_' | '7' | '/' => '\x1f',
+        '8' | '?' => '\x7f', // `Delete`
+        _ => return None,
+    })
+}

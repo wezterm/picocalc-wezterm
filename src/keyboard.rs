@@ -7,7 +7,7 @@ use embassy_rp::peripherals::I2C1;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_time::{Duration, Instant, Ticker, with_timeout};
 
 static BATTERY_PCT: AtomicU8 = AtomicU8::new(0xff);
 
@@ -353,8 +353,14 @@ pub async fn keyboard_reader(
                     }
                     _ => {
                         let proc = current_proc();
-                        proc.key_input(key).await;
-                        proc.render().await;
+                        if let Err(_) = with_timeout(Duration::from_millis(100), async {
+                            proc.key_input(key).await;
+                            proc.render().await;
+                        })
+                        .await
+                        {
+                            log::info!("timeout sending key to proc {}", proc.name());
+                        }
                     }
                 }
             }

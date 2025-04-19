@@ -258,6 +258,18 @@ impl VTActor for ScreenModel {
                 self.cursor_y.0 += 1;
                 self.check_scroll();
             }
+            b'\x08' => {
+                // Backspace
+                // FIXME: margins!
+                if self.cursor_x == 0 {
+                    self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
+                    self.cursor_y.0 = self.cursor_y.0.saturating_sub(1);
+                    self.cursor_x = self.width;
+                } else {
+                    self.cursor_x -= 1;
+                }
+                self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
+            }
             unhandled => {
                 log::info!("c0/c1: unhandled {unhandled}");
             }
@@ -274,9 +286,22 @@ impl VTActor for ScreenModel {
         ignored_excess_intermediates: bool,
         byte: u8,
     ) {
-        log::info!(
-            "esc: {params:?} intermediates={intermediates:?} ign={ignored_excess_intermediates} byte={byte}"
-        );
+        match byte {
+            b'>' => {
+                // DecNormalKeyPad
+            }
+            b'\\' => {
+                // StringTerminator - terminator a previous OSC most likely
+            }
+            b'=' => {
+                // DecApplicationKeyPad
+            }
+            _ => {
+                log::info!(
+                    "esc: {params:?} intermediates={intermediates:?} ign={ignored_excess_intermediates} byte={byte}"
+                );
+            }
+        }
     }
     fn csi_dispatch(&mut self, params: &[CsiParam], truncated: bool, byte: u8) {
         log::debug!("csi: {params:?} truncated={truncated} byte={byte}");
@@ -315,8 +340,14 @@ impl VTActor for ScreenModel {
                             self.current_attributes.set(Attributes::BOLD, false);
                             self.current_attributes.set(Attributes::HALF_BRIGHT, true);
                         }
+                        CsiParam::Integer(3) => {
+                            // ITALIC
+                        }
                         CsiParam::Integer(4) => {
                             self.current_attributes.set(Attributes::UNDERLINE, true);
+                        }
+                        CsiParam::Integer(7) => {
+                            self.current_attributes.set(Attributes::REVERSE, true);
                         }
                         CsiParam::Integer(9) => {
                             self.current_attributes
@@ -326,8 +357,14 @@ impl VTActor for ScreenModel {
                             self.current_attributes.set(Attributes::BOLD, false);
                             self.current_attributes.set(Attributes::HALF_BRIGHT, false);
                         }
+                        CsiParam::Integer(23) => {
+                            // !ITALIC
+                        }
                         CsiParam::Integer(24) => {
                             self.current_attributes.set(Attributes::UNDERLINE, false);
+                        }
+                        CsiParam::Integer(27) => {
+                            self.current_attributes.set(Attributes::REVERSE, false);
                         }
                         CsiParam::Integer(29) => {
                             self.current_attributes
@@ -351,8 +388,10 @@ impl VTActor for ScreenModel {
                             self.current_color &= 0x0f;
                             self.current_color |= ((bg - 39) as u8) << 4;
                         }
-                        _ => {
-                            log::info!("CSI SGR {p:?} not handled");
+                        p => {
+                            log::info!(
+                                "csi: {params:?} truncated={truncated} byte={byte}; SGR {p:?} not handled"
+                            );
                         }
                     }
                 }
