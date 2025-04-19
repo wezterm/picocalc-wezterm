@@ -19,7 +19,7 @@ jobs:
         submodules: recursive
     - name: Prepare
       run: |
-        rustup target add thumbv8m.main-none-eabihf
+        rustup +nightly target add thumbv8m.main-none-eabihf
         export PICO_SDK_PATH=$PWD/pico-sdk
         mkdir -p picotool/build
         cd picotool/build
