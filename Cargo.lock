@@ -2202,7 +2202,9 @@ dependencies = [
 
 [[package]]
 name = "vtparse"
-version = "0.6.2"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1726b5dabcf18909219a11c1ae3b85fff931b6e5ccf7321d998fc7665f52661b"
 dependencies = [
  "heapless 0.8.0",
  "utf8parse",
