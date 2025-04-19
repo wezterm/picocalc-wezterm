@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Prepare
+      run: |
+        rustup +nightly target add thumbv8m.main-none-eabihf
+        cargo install flip-link
+        export PICO_SDK_PATH=$PWD/pico-sdk
+        mkdir -p picotool/build
+        cd picotool/build
+        cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
+        make
+    - name: Build
+      run: make image
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        path: "wezterm-*.uf2"
+    - name: zip for dev release
+      # Use a singular (non-version-dependent) name so that we don't need to
+      # wrange retention processing in the release
+      run: 7z a -tzip wezterm-picocalc.zip wezterm-*.uf2
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v2
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      with:
+        tag_name: dev
+        files: |
+          wezterm-picocalc.zip
