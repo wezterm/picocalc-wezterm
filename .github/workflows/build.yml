@@ -20,6 +20,7 @@ jobs:
     - name: Prepare
       run: |
         rustup +nightly target add thumbv8m.main-none-eabihf
+        cargo install flip-link
         export PICO_SDK_PATH=$PWD/pico-sdk
         mkdir -p picotool/build
         cd picotool/build
