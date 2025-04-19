@@ -1,26 +1,11 @@
-
-# Building it
-
-You need `flip-link` to re-arrange the memory layout:
-
-```console
-$ cargo install flip-link
-```
-
-if for some reason this doesn't work out, comment out the `linker` line from
-`.cargo/config.toml`, but note that the estimation of available RAM printed
-on boot will be incorrect.
-
-# Other info
-
-## Connections
+# Connections
 
 ## Serial
-UART0 (`GP0`/`GP1`) - connected to mux on CH340C on picocalc
-UART1 (`GP8`/`GP9`) - connected to `M_UART3` aka `Serial1` on picocalc mcu. Default mcu firmware writes pmu debug logs to this.
+* UART0 (`GP0`/`GP1`) - connected to mux on CH340C on picocalc
+* UART1 (`GP8`/`GP9`) - connected to `M_UART3` aka `Serial1` on picocalc mcu. Default mcu firmware writes pmu debug logs to this.
 
 ## I2C
-I2C1 (`GP6`/`GP7`) - I2C bus connected to picocalc keyboard/pmu mcu `M_I2C1`
+* I2C1 (`GP6`/`GP7`) - I2C bus connected to picocalc keyboard/pmu mcu `M_I2C1`
 
 ## LCD
 * `GP10` - `SPI1_SCK`
