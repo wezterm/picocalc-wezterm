@@ -286,15 +286,30 @@ impl VTActor for ScreenModel {
         ignored_excess_intermediates: bool,
         byte: u8,
     ) {
-        match byte {
-            b'>' => {
+        let byte = char::from(byte);
+        match (byte, intermediates) {
+            ('>', []) => {
                 // DecNormalKeyPad
+                log::info!("DecNormalKeyPad unhandled");
             }
-            b'\\' => {
+            ('\\', []) => {
                 // StringTerminator - terminator a previous OSC most likely
             }
-            b'=' => {
+            ('=', []) => {
                 // DecApplicationKeyPad
+                log::info!("DecApplicationKeyPad unhandled");
+            }
+            ('0', [b'(']) => {
+                // DecLineDrawingG0
+                log::info!("DecLineDrawingG0 unhandled");
+            }
+            ('B', [b'(']) => {
+                // AsciiCharacterSetG0
+                log::info!("AsciiCharacterSetG0 unhandled");
+            }
+            ('A', [b'(']) => {
+                // UkCharacterSetG0
+                log::info!("UkCharacterSetG0 unhandled");
             }
             _ => {
                 log::info!(
@@ -305,98 +320,117 @@ impl VTActor for ScreenModel {
     }
     fn csi_dispatch(&mut self, params: &[CsiParam], truncated: bool, byte: u8) {
         log::debug!("csi: {params:?} truncated={truncated} byte={byte}");
-        match byte {
-            b'K' => {
-                // FIXME: just doing basic clear to end of line here
-                let x = self.cursor_x;
-                let current_attributes = self.current_attributes;
-                let current_color = self.current_color;
-                let line = self.line_log_mut(self.cursor_y).unwrap();
-                for (ascii, (attr, color)) in line
-                    .ascii
-                    .iter_mut()
-                    .zip(line.attributes.iter_mut().zip(line.colors.iter_mut()))
-                    .skip(x as usize)
-                {
-                    *ascii = 0x20;
-                    *attr = current_attributes;
-                    *color = current_color;
+
+        let mut params = params;
+        let control = char::from(byte);
+
+        while !params.is_empty() {
+            match (control, params) {
+                ('K', ..) => {
+                    // FIXME: just doing basic clear to end of line here
+                    let x = self.cursor_x;
+                    let current_attributes = self.current_attributes;
+                    let current_color = self.current_color;
+                    let line = self.line_log_mut(self.cursor_y).unwrap();
+                    for (ascii, (attr, color)) in line
+                        .ascii
+                        .iter_mut()
+                        .zip(line.attributes.iter_mut().zip(line.colors.iter_mut()))
+                        .skip(x as usize)
+                    {
+                        *ascii = 0x20;
+                        *attr = current_attributes;
+                        *color = current_color;
+                    }
+                    line.needs_paint = true;
                 }
-                line.needs_paint = true;
-            }
-            b'm' => {
-                for p in params {
-                    match p {
-                        CsiParam::Integer(0) => {
-                            // Reset all to normal
-                            self.current_attributes = Attributes::NONE;
-                            self.current_color = 0;
-                        }
-                        CsiParam::Integer(1) => {
-                            self.current_attributes.set(Attributes::BOLD, true);
-                            self.current_attributes.set(Attributes::HALF_BRIGHT, false);
-                        }
-                        CsiParam::Integer(2) => {
-                            self.current_attributes.set(Attributes::BOLD, false);
-                            self.current_attributes.set(Attributes::HALF_BRIGHT, true);
-                        }
-                        CsiParam::Integer(3) => {
-                            // ITALIC
-                        }
-                        CsiParam::Integer(4) => {
-                            self.current_attributes.set(Attributes::UNDERLINE, true);
-                        }
-                        CsiParam::Integer(7) => {
-                            self.current_attributes.set(Attributes::REVERSE, true);
-                        }
-                        CsiParam::Integer(9) => {
-                            self.current_attributes
-                                .set(Attributes::STRIKE_THROUGH, true);
-                        }
-                        CsiParam::Integer(22) => {
-                            self.current_attributes.set(Attributes::BOLD, false);
-                            self.current_attributes.set(Attributes::HALF_BRIGHT, false);
-                        }
-                        CsiParam::Integer(23) => {
-                            // !ITALIC
-                        }
-                        CsiParam::Integer(24) => {
-                            self.current_attributes.set(Attributes::UNDERLINE, false);
-                        }
-                        CsiParam::Integer(27) => {
-                            self.current_attributes.set(Attributes::REVERSE, false);
-                        }
-                        CsiParam::Integer(29) => {
-                            self.current_attributes
-                                .set(Attributes::STRIKE_THROUGH, false);
-                        }
-                        CsiParam::Integer(39) => {
-                            // Set default fg
-                            self.current_color &= 0xf0;
-                        }
-                        CsiParam::Integer(49) => {
-                            // Set default bg
-                            self.current_color &= 0x0f;
-                        }
-                        CsiParam::Integer(fg) if (30..=37).contains(fg) => {
-                            // Set fg color
-                            self.current_color &= 0xf0;
-                            self.current_color |= (fg - 29) as u8;
-                        }
-                        CsiParam::Integer(bg) if (40..=47).contains(bg) => {
-                            // Set bg color
-                            self.current_color &= 0x0f;
-                            self.current_color |= ((bg - 39) as u8) << 4;
-                        }
-                        p => {
-                            log::info!(
-                                "csi: {params:?} truncated={truncated} byte={byte}; SGR {p:?} not handled"
-                            );
+                ('m', [CsiParam::P(b';'), ..]) | ('m', [CsiParam::Integer(0), ..]) => {
+                    // Reset all to normal
+                    self.current_attributes = Attributes::NONE;
+                    self.current_color = 0;
+                }
+                ('m', [CsiParam::Integer(1), ..]) => {
+                    self.current_attributes.set(Attributes::BOLD, true);
+                    self.current_attributes.set(Attributes::HALF_BRIGHT, false);
+                }
+                ('m', [CsiParam::Integer(2), ..]) => {
+                    self.current_attributes.set(Attributes::BOLD, false);
+                    self.current_attributes.set(Attributes::HALF_BRIGHT, true);
+                }
+                ('m', [CsiParam::Integer(3), ..]) => {
+                    // ITALIC
+                }
+                ('m', [CsiParam::Integer(4), ..]) => {
+                    self.current_attributes.set(Attributes::UNDERLINE, true);
+                }
+                ('m', [CsiParam::Integer(7), ..]) => {
+                    self.current_attributes.set(Attributes::REVERSE, true);
+                }
+                ('m', [CsiParam::Integer(9), ..]) => {
+                    self.current_attributes
+                        .set(Attributes::STRIKE_THROUGH, true);
+                }
+                ('m', [CsiParam::Integer(22), ..]) => {
+                    self.current_attributes.set(Attributes::BOLD, false);
+                    self.current_attributes.set(Attributes::HALF_BRIGHT, false);
+                }
+                ('m', [CsiParam::Integer(23), ..]) => {
+                    // !ITALIC
+                }
+                ('m', [CsiParam::Integer(24), ..]) => {
+                    self.current_attributes.set(Attributes::UNDERLINE, false);
+                }
+                ('m', [CsiParam::Integer(27), ..]) => {
+                    self.current_attributes.set(Attributes::REVERSE, false);
+                }
+                ('m', [CsiParam::Integer(29), ..]) => {
+                    self.current_attributes
+                        .set(Attributes::STRIKE_THROUGH, false);
+                }
+                ('m', [CsiParam::Integer(39), ..]) => {
+                    // Set default fg
+                    self.current_color &= 0xf0;
+                }
+                ('m', [CsiParam::Integer(49), ..]) => {
+                    // Set default bg
+                    self.current_color &= 0x0f;
+                }
+                ('m', [CsiParam::Integer(fg), ..]) if (30..=37).contains(fg) => {
+                    // Set fg color
+                    self.current_color &= 0xf0;
+                    self.current_color |= (fg - 29) as u8;
+                }
+                ('m', [CsiParam::Integer(bg), ..]) if (40..=47).contains(bg) => {
+                    // Set bg color
+                    self.current_color &= 0x0f;
+                    self.current_color |= ((bg - 39) as u8) << 4;
+                }
+                ('h', [CsiParam::P(b'?'), CsiParam::Integer(n), ..]) => {
+                    // TerminalMode set high
+                    log::info!("Unhandled terminal mode query {n} on");
+                    params = &params[2..];
+                    continue;
+                }
+                ('l', [CsiParam::P(b'?'), CsiParam::Integer(n), ..]) => {
+                    // TerminalMode set low
+                    log::info!("Unhandled terminal mode query {n} off");
+                    params = &params[2..];
+                    continue;
+                }
+                ('J', [CsiParam::Integer(2), ..]) => {
+                    // Erase in display
+                    for y in 0..self.height {
+                        if let Some(line) = self.line_log_mut(LogicalY(y)) {
+                            line.clear();
                         }
                     }
                 }
+                unhandled => {
+                    log::info!("csi: {unhandled:?} not handled. {params:?} truncated={truncated}",);
+                }
             }
-            _ => {}
+
+            params = &params[1..];
         }
     }
     fn osc_dispatch(&mut self, params: &[&[u8]]) {

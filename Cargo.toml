@@ -50,6 +50,7 @@ sunset-embassy = {version="0.2", default-features = false, git = "https://github
 sunset = {version="0.2", default-features = false, git = "https://github.com/wez/sunset.git", branch="elided"}
 chrono = { version = "0.4.40", default-features = false }
 vtparse = { version="0.7", default-features = false, features = ["no_std", "alloc"] }
+#vtparse = { path="../wezterm/vtparse", default-features = false, features = ["no_std", "alloc"] }
 
 [profile.dev]
 debug = 2
