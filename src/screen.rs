@@ -9,7 +9,9 @@ use embedded_graphics::pixelcolor::{Rgb565, Rgb888};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::*;
 use embedded_graphics::text::Text;
-use vtparse::{CsiParam, VTActor, VTParser};
+use wezterm_escape_parser::color::ColorSpec;
+use wezterm_escape_parser::parser::Parser;
+use wezterm_escape_parser::{Action, ControlCode, Esc, EscCode};
 
 extern crate alloc;
 
@@ -189,7 +191,7 @@ impl Default for Line {
 
 pub struct Screen {
     model: ScreenModel,
-    vt_parser: VTParser,
+    parser: Parser,
 }
 
 impl Deref for Screen {
@@ -209,12 +211,13 @@ impl Screen {
     pub fn new() -> Self {
         Self {
             model: ScreenModel::default(),
-            vt_parser: VTParser::new(),
+            parser: Parser::new(),
         }
     }
 
     pub fn parse_bytes(&mut self, bytes: &[u8]) {
-        self.vt_parser.parse(bytes, &mut self.model);
+        self.parser
+            .parse(bytes, |action| self.model.apply_action(action));
     }
 
     pub fn print(&mut self, text: &str) {
@@ -222,7 +225,148 @@ impl Screen {
     }
 }
 
-impl VTActor for ScreenModel {
+impl ScreenModel {
+    fn apply_action(&mut self, action: Action) {
+        match action {
+            Action::Print(c) => {
+                self.print(c);
+            }
+            Action::PrintString(s) => {
+                for c in s.chars() {
+                    self.print(c);
+                }
+            }
+            Action::Control(c) => {
+                match c {
+                    ControlCode::CarriageReturn => {
+                        self.cursor_x = 0;
+                        self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
+                    }
+                    ControlCode::LineFeed => {
+                        self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
+                        self.cursor_y.0 += 1;
+                        self.check_scroll();
+                    }
+                    ControlCode::Backspace => {
+                        // FIXME: margins!
+                        if self.cursor_x == 0 {
+                            self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
+                            self.cursor_y.0 = self.cursor_y.0.saturating_sub(1);
+                            self.cursor_x = self.width;
+                        } else {
+                            self.cursor_x -= 1;
+                        }
+                        self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
+                    }
+                    unhandled => {
+                        log::info!("c0/c1: unhandled {unhandled:?}");
+                    }
+                }
+            }
+            Action::Esc(esc) => match esc {
+                unhandled @ Esc::Unspecified { .. } => {
+                    log::info!("esc: unhandled {unhandled:?}");
+                }
+                Esc::Code(EscCode::StringTerminator) => {}
+                unhandled => {
+                    log::info!("esc: unhandled {unhandled:?}");
+                }
+            },
+            Action::CSI(csi) => {
+                use wezterm_escape_parser::csi::*;
+
+                match csi {
+                    CSI::Edit(Edit::EraseInLine(EraseInLine::EraseToEndOfLine)) => {
+                        let x = self.cursor_x;
+                        let current_attributes = self.current_attributes;
+                        let current_color = self.current_color;
+                        let line = self.line_log_mut(self.cursor_y).unwrap();
+                        for (ascii, (attr, color)) in line
+                            .ascii
+                            .iter_mut()
+                            .zip(line.attributes.iter_mut().zip(line.colors.iter_mut()))
+                            .skip(x as usize)
+                        {
+                            *ascii = 0x20;
+                            *attr = current_attributes;
+                            *color = current_color;
+                        }
+                        line.needs_paint = true;
+                    }
+                    CSI::Edit(Edit::EraseInDisplay(EraseInDisplay::EraseDisplay)) => {
+                        // Erase in display
+                        for y in 0..self.height {
+                            if let Some(line) = self.line_log_mut(LogicalY(y)) {
+                                line.clear();
+                            }
+                        }
+                    }
+                    CSI::Sgr(Sgr::Intensity(Intensity::Bold)) => {
+                        self.current_attributes.set(Attributes::BOLD, true);
+                        self.current_attributes.set(Attributes::HALF_BRIGHT, false);
+                    }
+                    CSI::Sgr(Sgr::Intensity(Intensity::Normal)) => {
+                        self.current_attributes.set(Attributes::BOLD, false);
+                        self.current_attributes.set(Attributes::HALF_BRIGHT, false);
+                    }
+                    CSI::Sgr(Sgr::Intensity(Intensity::Half)) => {
+                        self.current_attributes.set(Attributes::BOLD, false);
+                        self.current_attributes.set(Attributes::HALF_BRIGHT, true);
+                    }
+                    CSI::Sgr(Sgr::StrikeThrough(enable)) => {
+                        self.current_attributes
+                            .set(Attributes::STRIKE_THROUGH, enable);
+                    }
+                    CSI::Sgr(Sgr::Inverse(enable)) => {
+                        self.current_attributes.set(Attributes::REVERSE, enable);
+                    }
+                    CSI::Sgr(Sgr::Italic(_enable)) => {}
+                    CSI::Sgr(Sgr::Blink(_)) => {}
+                    CSI::Sgr(Sgr::Underline(Underline::None)) => {
+                        self.current_attributes.set(Attributes::UNDERLINE, false);
+                    }
+                    CSI::Sgr(Sgr::Underline(_)) => {
+                        self.current_attributes.set(Attributes::UNDERLINE, true);
+                    }
+                    CSI::Sgr(Sgr::Reset) => {
+                        self.current_attributes = Attributes::NONE;
+                        self.current_color = 0;
+                    }
+                    CSI::Sgr(Sgr::Foreground(ColorSpec::Default)) => {
+                        // Set default fg
+                        self.current_color &= 0xf0;
+                    }
+                    CSI::Sgr(Sgr::Background(ColorSpec::Default)) => {
+                        // Set default bg
+                        self.current_color &= 0x0f;
+                    }
+                    CSI::Sgr(Sgr::Foreground(ColorSpec::PaletteIndex(idx))) => {
+                        // Set fg color
+                        self.current_color &= 0xf0;
+                        self.current_color |= (idx + 1) as u8;
+                    }
+                    CSI::Sgr(Sgr::Background(ColorSpec::PaletteIndex(idx))) => {
+                        // Set bg color
+                        self.current_color &= 0x0f;
+                        self.current_color |= ((idx + 1) as u8) << 4;
+                    }
+                    unhandled => {
+                        log::info!("csi: unhandled {unhandled:?}");
+                    }
+                }
+            }
+            Action::OperatingSystemCommand(osc) => {
+                log::info!("osc: unhandled {osc:?}");
+            }
+            Action::DeviceControl(ctrl) => {
+                log::info!("unhandled {ctrl:?}");
+            }
+            Action::Sixel(_sixel) => {}
+            Action::XtGetTcap(_tcap) => {}
+            Action::KittyImage(_img) => {}
+        }
+    }
+
     fn print(&mut self, c: char) {
         let ascii = if c.is_ascii() {
             c as u32 as u8
@@ -245,200 +389,6 @@ impl VTActor for ScreenModel {
             self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
             self.check_scroll();
         }
-    }
-
-    fn execute_c0_or_c1(&mut self, c: u8) {
-        match c {
-            b'\r' => {
-                self.cursor_x = 0;
-                self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
-            }
-            b'\n' => {
-                self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
-                self.cursor_y.0 += 1;
-                self.check_scroll();
-            }
-            b'\x08' => {
-                // Backspace
-                // FIXME: margins!
-                if self.cursor_x == 0 {
-                    self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
-                    self.cursor_y.0 = self.cursor_y.0.saturating_sub(1);
-                    self.cursor_x = self.width;
-                } else {
-                    self.cursor_x -= 1;
-                }
-                self.line_log_mut(self.cursor_y).unwrap().needs_paint = true;
-            }
-            unhandled => {
-                log::info!("c0/c1: unhandled {unhandled}");
-            }
-        }
-    }
-
-    fn dcs_hook(&mut self, _: u8, _: &[i64], _: &[u8], _: bool) {}
-    fn dcs_put(&mut self, _: u8) {}
-    fn dcs_unhook(&mut self) {}
-    fn esc_dispatch(
-        &mut self,
-        params: &[i64],
-        intermediates: &[u8],
-        ignored_excess_intermediates: bool,
-        byte: u8,
-    ) {
-        let byte = char::from(byte);
-        match (byte, intermediates) {
-            ('>', []) => {
-                // DecNormalKeyPad
-                log::info!("DecNormalKeyPad unhandled");
-            }
-            ('\\', []) => {
-                // StringTerminator - terminator a previous OSC most likely
-            }
-            ('=', []) => {
-                // DecApplicationKeyPad
-                log::info!("DecApplicationKeyPad unhandled");
-            }
-            ('0', [b'(']) => {
-                // DecLineDrawingG0
-                log::info!("DecLineDrawingG0 unhandled");
-            }
-            ('B', [b'(']) => {
-                // AsciiCharacterSetG0
-                log::info!("AsciiCharacterSetG0 unhandled");
-            }
-            ('A', [b'(']) => {
-                // UkCharacterSetG0
-                log::info!("UkCharacterSetG0 unhandled");
-            }
-            _ => {
-                log::info!(
-                    "esc: {params:?} intermediates={intermediates:?} ign={ignored_excess_intermediates} byte={byte}"
-                );
-            }
-        }
-    }
-    fn csi_dispatch(&mut self, params: &[CsiParam], truncated: bool, byte: u8) {
-        log::debug!("csi: {params:?} truncated={truncated} byte={byte}");
-
-        let mut params = params;
-        let control = char::from(byte);
-
-        while !params.is_empty() {
-            match (control, params) {
-                ('K', ..) => {
-                    // FIXME: just doing basic clear to end of line here
-                    let x = self.cursor_x;
-                    let current_attributes = self.current_attributes;
-                    let current_color = self.current_color;
-                    let line = self.line_log_mut(self.cursor_y).unwrap();
-                    for (ascii, (attr, color)) in line
-                        .ascii
-                        .iter_mut()
-                        .zip(line.attributes.iter_mut().zip(line.colors.iter_mut()))
-                        .skip(x as usize)
-                    {
-                        *ascii = 0x20;
-                        *attr = current_attributes;
-                        *color = current_color;
-                    }
-                    line.needs_paint = true;
-                }
-                ('m', [CsiParam::P(b';'), ..]) | ('m', [CsiParam::Integer(0), ..]) => {
-                    // Reset all to normal
-                    self.current_attributes = Attributes::NONE;
-                    self.current_color = 0;
-                }
-                ('m', [CsiParam::Integer(1), ..]) => {
-                    self.current_attributes.set(Attributes::BOLD, true);
-                    self.current_attributes.set(Attributes::HALF_BRIGHT, false);
-                }
-                ('m', [CsiParam::Integer(2), ..]) => {
-                    self.current_attributes.set(Attributes::BOLD, false);
-                    self.current_attributes.set(Attributes::HALF_BRIGHT, true);
-                }
-                ('m', [CsiParam::Integer(3), ..]) => {
-                    // ITALIC
-                }
-                ('m', [CsiParam::Integer(4), ..]) => {
-                    self.current_attributes.set(Attributes::UNDERLINE, true);
-                }
-                ('m', [CsiParam::Integer(7), ..]) => {
-                    self.current_attributes.set(Attributes::REVERSE, true);
-                }
-                ('m', [CsiParam::Integer(9), ..]) => {
-                    self.current_attributes
-                        .set(Attributes::STRIKE_THROUGH, true);
-                }
-                ('m', [CsiParam::Integer(22), ..]) => {
-                    self.current_attributes.set(Attributes::BOLD, false);
-                    self.current_attributes.set(Attributes::HALF_BRIGHT, false);
-                }
-                ('m', [CsiParam::Integer(23), ..]) => {
-                    // !ITALIC
-                }
-                ('m', [CsiParam::Integer(24), ..]) => {
-                    self.current_attributes.set(Attributes::UNDERLINE, false);
-                }
-                ('m', [CsiParam::Integer(27), ..]) => {
-                    self.current_attributes.set(Attributes::REVERSE, false);
-                }
-                ('m', [CsiParam::Integer(29), ..]) => {
-                    self.current_attributes
-                        .set(Attributes::STRIKE_THROUGH, false);
-                }
-                ('m', [CsiParam::Integer(39), ..]) => {
-                    // Set default fg
-                    self.current_color &= 0xf0;
-                }
-                ('m', [CsiParam::Integer(49), ..]) => {
-                    // Set default bg
-                    self.current_color &= 0x0f;
-                }
-                ('m', [CsiParam::Integer(fg), ..]) if (30..=37).contains(fg) => {
-                    // Set fg color
-                    self.current_color &= 0xf0;
-                    self.current_color |= (fg - 29) as u8;
-                }
-                ('m', [CsiParam::Integer(bg), ..]) if (40..=47).contains(bg) => {
-                    // Set bg color
-                    self.current_color &= 0x0f;
-                    self.current_color |= ((bg - 39) as u8) << 4;
-                }
-                ('h', [CsiParam::P(b'?'), CsiParam::Integer(n), ..]) => {
-                    // TerminalMode set high
-                    log::info!("Unhandled terminal mode query {n} on");
-                    params = &params[2..];
-                    continue;
-                }
-                ('l', [CsiParam::P(b'?'), CsiParam::Integer(n), ..]) => {
-                    // TerminalMode set low
-                    log::info!("Unhandled terminal mode query {n} off");
-                    params = &params[2..];
-                    continue;
-                }
-                ('J', [CsiParam::Integer(2), ..]) => {
-                    // Erase in display
-                    for y in 0..self.height {
-                        if let Some(line) = self.line_log_mut(LogicalY(y)) {
-                            line.clear();
-                        }
-                    }
-                }
-                unhandled => {
-                    log::info!("csi: {unhandled:?} not handled. {params:?} truncated={truncated}",);
-                }
-            }
-
-            params = &params[1..];
-        }
-    }
-    fn osc_dispatch(&mut self, params: &[&[u8]]) {
-        log::info!("osc: {params:?}");
-    }
-
-    fn apc_dispatch(&mut self, data: alloc::vec::Vec<u8>) {
-        log::info!("apc: {data:x?}");
     }
 }
 
