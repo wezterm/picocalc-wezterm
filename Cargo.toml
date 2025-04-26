@@ -3,6 +3,13 @@ name = "picocalc-wezterm"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+pimoroni2w = ["rp235xb"]
+pico2w = ["rp235xa"]
+rp235xb = ["embassy-rp/rp235xb"]
+rp235xa = ["embassy-rp/rp235xa"]
+
 [dependencies]
 # panic-probe = { version = "*" }
 async-trait = "0.1.88"
@@ -17,7 +24,7 @@ embassy-embedded-hal = { version = "*" }
 embassy-executor = { version = "*", features = [ "arch-cortex-m", "executor-thread", "executor-interrupt", "nightly" ] }
 embassy-futures = { version = "*" }
 embassy-net = { version = "*", features = ["proto-ipv4", "tcp", "udp", "dhcpv4", "dns"] }
-embassy-rp = { version = "*", features = [ "binary-info", "critical-section-impl", "unstable-pac", "time-driver", "rp235xa" ] }
+embassy-rp = { version = "*", features = [ "binary-info", "critical-section-impl", "unstable-pac", "time-driver" ] }
 embassy-sync = { version = "*" }
 embassy-time = { version = "*" }
 embassy-usb = { version = "*" }
@@ -49,7 +56,10 @@ static_cell = { version = "*" }
 sunset-embassy = {version="0.2", default-features = false, git = "https://github.com/wez/sunset.git", branch="elided"}
 sunset = {version="0.2", default-features = false, git = "https://github.com/wez/sunset.git", branch="elided"}
 chrono = { version = "0.4.40", default-features = false }
+wezterm-cell = { path="../wezterm/wezterm-cell", default-features=false }
+wezterm-char-props = { path="../wezterm/wezterm-char-props", default-features=false }
 wezterm-escape-parser = { path="../wezterm/wezterm-escape-parser" }
+wezterm-surface = { path="../wezterm/wezterm-surface" }
 
 [profile.dev]
 debug = 2

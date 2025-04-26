@@ -17,9 +17,18 @@ fn main() {
     // Put `memory.x` in our output directory and ensure it's
     // on the linker search path.
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
+
+    let memory_x = if env::var("CARGO_FEATURE_PICO2W").is_ok() {
+        include_str!("pico2w.x")
+    } else if env::var("CARGO_FEATURE_PIMORONI2W").is_ok() {
+        include_str!("pimoroni2w.x")
+    } else {
+        include_str!("memory.x")
+    };
+
     File::create(out.join("memory.x"))
         .unwrap()
-        .write_all(include_bytes!("memory.x"))
+        .write_all(memory_x.as_bytes())
         .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
 

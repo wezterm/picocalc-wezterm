@@ -155,7 +155,13 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    print!("\u{1b}[35mWezTerm {}\u{1b}[0m\r\n", env!("WEZTERM_CI_TAG"));
+    print!("\u{1b}[35mWezTerm {} ({})\u{1b}[0m\r\n", env!("WEZTERM_CI_TAG"), if cfg!(feature="pico2w") {
+        "pico2w"
+    } else if cfg!(feature="pimoroni2w") {
+        "pimoroni2w"
+    } else {
+        ""
+    });
 
     if let Some(msg) = panic_persist::get_panic_message_utf8() {
         // Give serial a chance to be ready to capture this info

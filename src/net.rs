@@ -52,10 +52,10 @@ async fn net_runner(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'s
 
 pub async fn setup_wifi(
     spawner: &Spawner,
-    pin_23: embassy_rp::peripherals::PIN_23,
-    pin_24: embassy_rp::peripherals::PIN_24,
-    pin_25: embassy_rp::peripherals::PIN_25,
-    pin_29: embassy_rp::peripherals::PIN_29,
+    pin_23: embassy_rp::peripherals::PIN_23, // WL_ON
+    pin_24: embassy_rp::peripherals::PIN_24, // WL_D
+    pin_25: embassy_rp::peripherals::PIN_25, // WL_CS
+    pin_29: embassy_rp::peripherals::PIN_29, // WL_CLK
     pio_0: embassy_rp::peripherals::PIO0,
     dma_ch0: embassy_rp::peripherals::DMA_CH0,
 ) {
