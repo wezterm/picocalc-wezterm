@@ -7,7 +7,6 @@ use embedded_alloc::LlffHeap as Heap;
 pub static HEAP: DualHeap = DualHeap::empty();
 const HEAP_SIZE: usize = 64 * 1024;
 static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
-static mut HEAP_TWO: [MaybeUninit<u8>; 1024] = [MaybeUninit::uninit(); 1024];
 
 struct Region {
     start: AtomicUsize,
@@ -113,12 +112,10 @@ unsafe impl GlobalAlloc for DualHeap {
 pub fn init_heap() {
     let primary_start = &raw mut HEAP_MEM as usize;
     unsafe { HEAP.add_primary(Region::new(primary_start, HEAP_SIZE)) }
+}
 
-    // The idea is that internal PSRAM would get added as the secondary.
-    // This is just a proof of concept that we can make an aggregating
-    // heap allocator
-    let secondary_start = &raw mut HEAP_TWO as usize;
-    unsafe { HEAP.add_secondary(Region::new(secondary_start, 1024)) }
+pub fn init_qmi_psram_heap(size: u32) {
+    unsafe { HEAP.add_secondary(Region::new(0x11000000, size as usize)) }
 }
 
 pub async fn free_command(_args: &[&str]) {
@@ -135,11 +132,11 @@ pub async fn free_command(_args: &[&str]) {
         "RAM"
     );
 
-    let xip_used = HEAP.secondary.used();
-    let xip_free = HEAP.secondary.free();
-    let xip_total = xip_used + xip_free;
+    let qmi_used = HEAP.secondary.used();
+    let qmi_free = HEAP.secondary.free();
+    let qmi_total = qmi_used + qmi_free;
     print!(
-        "{:<10} {xip_total:>10} {xip_used:>10} {xip_free:>10}\r\n",
-        "XIP"
+        "{:<10} {qmi_total:>10} {qmi_used:>10} {qmi_free:>10}\r\n",
+        "PSRAM (QMI)"
     );
 }

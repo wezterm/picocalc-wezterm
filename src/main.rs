@@ -3,8 +3,8 @@
 #![no_main]
 
 use crate::config::{CONFIG, Flash};
-use crate::heap::HEAP;
-use crate::psram::init_psram;
+use crate::heap::{HEAP, init_qmi_psram_heap};
+use crate::psram::{init_psram, init_psram_qmi};
 use crate::screen::SCREEN;
 use crate::storage::init_storage;
 use core::cell::RefCell;
@@ -155,13 +155,17 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    print!("\u{1b}[35mWezTerm {} ({})\u{1b}[0m\r\n", env!("WEZTERM_CI_TAG"), if cfg!(feature="pico2w") {
-        "pico2w"
-    } else if cfg!(feature="pimoroni2w") {
-        "pimoroni2w"
-    } else {
-        ""
-    });
+    print!(
+        "\u{1b}[35mWezTerm {} ({})\u{1b}[0m\r\n",
+        env!("WEZTERM_CI_TAG"),
+        if cfg!(feature = "pico2w") {
+            "pico2w"
+        } else if cfg!(feature = "pimoroni2w") {
+            "pimoroni2w"
+        } else {
+            ""
+        }
+    );
 
     if let Some(msg) = panic_persist::get_panic_message_utf8() {
         // Give serial a chance to be ready to capture this info
@@ -240,11 +244,20 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
+    let psram_qmi_size = init_psram_qmi(&embassy_rp::pac::QMI, &embassy_rp::pac::XIP_CTRL);
+    if psram_qmi_size > 0 {
+        init_qmi_psram_heap(psram_qmi_size);
+    }
+
     {
         print!(
-            "RAM {} avail of 512KiB. PSRAM {}\r\n",
+            "RAM {} avail of 520KiB\r\n",
             byte_size(get_max_usable_stack()),
+        );
+        print!(
+            "PSRAM: {} (SLOW), {} (QMI)\r\n",
             byte_size(psram.size),
+            byte_size(psram_qmi_size),
         );
         if psram.size == 0 {
             // This can happen if you power on the pico without first
