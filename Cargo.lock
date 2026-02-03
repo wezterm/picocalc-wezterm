@@ -1460,6 +1460,7 @@ dependencies = [
  "async-trait",
  "bitflags 2.9.0",
  "chrono",
+ "cortex-m",
  "cortex-m-rt",
  "crc",
  "critical-section",

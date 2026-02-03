@@ -257,9 +257,10 @@ async fn ssh_session_task(host: String, command: Option<String>) {
     match dns_client.query(&host, DnsQueryType::A).await {
         Ok(addrs) => {
             log::info!("{host} -> {addrs:?}");
-            let mut socket_tx_buf = [0u8; 8192];
-            let mut socket_rx_buf = [0u8; 8192];
-            let mut tcp_socket = TcpSocket::new(stack, &mut socket_tx_buf, &mut socket_rx_buf);
+            let mut socket_tx_buf = Box::new([0u8; 8192]);
+            let mut socket_rx_buf = Box::new([0u8; 8192]);
+            let mut tcp_socket =
+                TcpSocket::new(stack, &mut socket_tx_buf[..], &mut socket_rx_buf[..]);
 
             match tcp_socket
                 .connect(IpEndpoint {
@@ -279,9 +280,10 @@ async fn ssh_session_task(host: String, command: Option<String>) {
 
                     print!("Connected to {host} {}:22\r\n", addrs[0]);
                     let (mut read, mut write) = tcp_socket.split();
-                    let mut ssh_tx_buf = [0u8; 8192];
-                    let mut ssh_rx_buf = [0u8; 8192];
-                    let ssh_client = match SSHClient::new(&mut ssh_tx_buf, &mut ssh_rx_buf) {
+                    let mut ssh_tx_buf = Box::new([0u8; 8192]);
+                    let mut ssh_rx_buf = Box::new([0u8; 8192]);
+                    let ssh_client = match SSHClient::new(&mut ssh_tx_buf[..], &mut ssh_rx_buf[..])
+                    {
                         Ok(client) => client,
                         Err(err) => {
                             print!("SSHClient::new: {err:?}\r\n");

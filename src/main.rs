@@ -2,7 +2,9 @@
 #![no_std]
 #![no_main]
 
-use crate::config::{CONFIG, Flash};
+use crate::config::CONFIG;
+#[cfg(not(feature = "configsdcard"))]
+use crate::config::Flash;
 use crate::heap::{HEAP, init_qmi_psram_heap};
 use crate::psram::{init_psram, init_psram_qmi};
 use crate::screen::SCREEN;
@@ -63,7 +65,14 @@ type PicoCalcDisplay<'a> = mipidsi::Display<
     Output<'a>,
 >;
 
+#[cfg(not(feature = "configsdcard"))]
+#[path = "config.rs"]
 mod config;
+
+#[cfg(feature = "configsdcard")]
+#[path = "config_sdcard.rs"]
+mod config;
+
 mod fixed_str;
 mod heap;
 mod keyboard;
@@ -140,6 +149,9 @@ fn get_max_usable_stack() -> usize {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    unsafe {
+        cortex_m::interrupt::enable();
+    }
     let p = embassy_rp::init(Default::default());
     crate::heap::init_heap();
 
@@ -236,7 +248,9 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(crate::screen::screen_painter(display));
     spawner.must_spawn(crate::keyboard::keyboard_reader(i2c_bus));
 
+    #[cfg(not(feature = "configsdcard"))]
     let flash = Flash::new(p.FLASH, p.DMA_CH3);
+    #[cfg(not(feature = "configsdcard"))]
     CONFIG.get().lock().await.assign_flash(flash);
 
     let psram = init_psram(
