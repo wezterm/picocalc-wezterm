@@ -19,7 +19,7 @@ pub static CONFIG: LazyLock<Mutex<CriticalSectionRawMutex, Configuration>> =
 pub struct Configuration {
     cache: FnvIndexMap<StrKey, StrValue, 32>,
     dirty: bool,
-    loaded: bool, // Gibt an, ob erfolgreich von SD-Karte geladen wurde
+    loaded: bool,
 }
 
 pub type StrKey = FixedString<32>;
@@ -40,7 +40,6 @@ impl From<embedded_sdmmc::Error<embedded_sdmmc::SdCardError>> for ConfigError {
 }
 
 impl Configuration {
-    /// Lädt die Konfiguration von der SD-Karte
     async fn load_from_sd(&mut self) -> Result<(), ConfigError> {
         let mut storage = STORAGE.get().lock().await;
         let Some(mgr) = storage.vol_mgr() else {
@@ -50,13 +49,11 @@ impl Configuration {
         let mut vol = mgr.open_volume(VolumeIdx(0))?;
         let mut root_dir = vol.open_root_dir()?;
 
-        // Öffne Datei und lese sie komplett, bevor wir root_dir schließen
         let buffer_result: Result<Vec<u8>, ConfigError> = {
             match root_dir.open_file_in_dir(CONFIG_FILENAME, embedded_sdmmc::Mode::ReadOnly) {
                 Ok(mut file) => {
                     let mut buffer = Vec::new();
 
-                    // Lese die Datei in Chunks
                     loop {
                         let mut chunk = [0u8; 512];
                         match file.read(&mut chunk) {
@@ -72,18 +69,13 @@ impl Configuration {
                     file.close()?;
                     Ok(buffer)
                 }
-                Err(embedded_sdmmc::Error::NotFound) => {
-                    // Datei existiert noch nicht, ist ok
-                    Ok(Vec::new())
-                }
+                Err(embedded_sdmmc::Error::NotFound) => Ok(Vec::new()),
                 Err(e) => Err(e.into()),
             }
         };
 
-        // Jetzt können wir root_dir sicher schließen
         root_dir.close()?;
 
-        // Verarbeite das Ergebnis
         match buffer_result {
             Ok(buffer) => {
                 if buffer.is_empty() {
@@ -93,7 +85,6 @@ impl Configuration {
                     return Ok(());
                 }
 
-                // Parse die Konfigurationsdatei (Format: KEY=VALUE pro Zeile)
                 self.cache.clear();
                 let content = String::from_utf8_lossy(&buffer);
                 for line in content.lines() {
@@ -112,7 +103,6 @@ impl Configuration {
         }
     }
 
-    /// Speichert die Konfiguration auf der SD-Karte
     async fn save_to_sd(&mut self) -> Result<(), ConfigError> {
         if !self.dirty {
             return Ok(());
@@ -126,7 +116,6 @@ impl Configuration {
         let mut vol = mgr.open_volume(VolumeIdx(0))?;
         let mut root_dir = vol.open_root_dir()?;
 
-        // Erstelle den Dateiinhalt
         let mut content = String::new();
         for (key, value) in &self.cache {
             content.push_str(key.as_str());
@@ -137,17 +126,14 @@ impl Configuration {
 
         let data = content.as_bytes();
 
-        // Lösche alte Datei falls vorhanden
         let _ = root_dir.delete_file_in_dir(CONFIG_FILENAME);
 
-        // Öffne, schreibe und schließe die Datei, bevor wir root_dir schließen
         let write_result: Result<(), ConfigError> = {
             match root_dir.open_file_in_dir(
                 CONFIG_FILENAME,
                 embedded_sdmmc::Mode::ReadWriteCreateOrTruncate,
             ) {
                 Ok(mut file) => {
-                    // Schreibe die Daten
                     let result = match file.write(data) {
                         Ok(_) => Ok(()),
                         Err(e) => Err(e.into()),
@@ -159,10 +145,8 @@ impl Configuration {
             }
         };
 
-        // Jetzt können wir root_dir sicher schließen
         root_dir.close()?;
 
-        // Wenn erfolgreich, setze dirty auf false
         if write_result.is_ok() {
             self.dirty = false;
         }
@@ -171,7 +155,6 @@ impl Configuration {
     }
 
     pub async fn fetch(&mut self, key: &str) -> Result<Option<StrValue>, ConfigError> {
-        // Lade erst die Konfiguration, falls noch nicht geladen
         if !self.loaded {
             let _ = self.load_from_sd().await;
         }
@@ -181,7 +164,6 @@ impl Configuration {
     }
 
     pub async fn remove(&mut self, key: &str) -> Result<(), ConfigError> {
-        // Lade erst die Konfiguration, falls noch nicht geladen
         if !self.loaded {
             let _ = self.load_from_sd().await;
         }
@@ -195,7 +177,6 @@ impl Configuration {
     }
 
     pub async fn store(&mut self, key: &str, value: StrValue) -> Result<(), ConfigError> {
-        // Lade erst die Konfiguration, falls noch nicht geladen
         if !self.loaded {
             let _ = self.load_from_sd().await;
         }
@@ -210,12 +191,11 @@ impl Configuration {
     pub async fn format(&mut self) -> Result<(), ConfigError> {
         self.cache.clear();
         self.dirty = true;
-        self.loaded = true; // Nach format ist die Config geladen (wenn auch leer)
+        self.loaded = true;
         self.save_to_sd().await
     }
 
     pub async fn get_all(&mut self) -> Result<FnvIndexMap<StrKey, StrValue, 32>, ConfigError> {
-        // Lade erst die Konfiguration, falls noch nicht geladen
         if !self.loaded {
             let _ = self.load_from_sd().await;
         }
