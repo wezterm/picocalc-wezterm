@@ -1,8 +1,8 @@
 CHIP=pico2w
 #pimoroni2w
 
-#FEATURES=${CHIP},configsdcard
-FEATURES=${CHIP}
+FEATURES=${CHIP},configsdcard
+#FEATURES=${CHIP}
 
 
 check:
