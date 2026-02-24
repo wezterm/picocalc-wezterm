@@ -116,6 +116,10 @@ impl LocalShell {
     }
 
     async fn dispatch_command(&self, command: &str) {
+        if command.trim().is_empty() {
+            return;
+        }
+
         let argv: Vec<&str> = command.split(' ').collect();
         let arg0 = argv[0];
         match arg0 {
