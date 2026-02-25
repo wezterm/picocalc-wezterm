@@ -7,6 +7,7 @@ edition = "2024"
 default = []
 pimoroni2w = ["rp235xb"]
 pico2w = ["rp235xa"]
+configsdcard = []
 rp235xb = ["embassy-rp/rp235xb"]
 rp235xa = ["embassy-rp/rp235xa"]
 
@@ -60,6 +61,7 @@ wezterm-cell = { git="https://github.com/wezterm/wezterm", default-features=fals
 wezterm-char-props = { git="https://github.com/wezterm/wezterm", default-features=false }
 wezterm-escape-parser = { git="https://github.com/wezterm/wezterm" }
 wezterm-surface = { git="https://github.com/wezterm/wezterm" }
+cortex-m = "0.7.7"
 
 [profile.dev]
 debug = 2

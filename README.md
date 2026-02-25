@@ -18,6 +18,7 @@ This project is a bit of a toy, but it's a fun one to hack on!
  * Terminal Emulation
     * many escape sequences currently not implemented
     * keyboard encoding not yet fully implemented
+ * [x] Works with uf2loader by @pelrun - just put its uf2 file in /pico2-apps of an SD card
 
 ## Using it
 
@@ -34,7 +35,7 @@ $ reboot
 
 > [!CAUTION]
 > Please note that the config storage is clear-text data held
-> in a region of the flash memory on the device. If someone
+> in a file called WEZTERM.CFG on the SD card. If someone
 > has your device, it is possible to extract any credentials
 > from it simply by booting it up and running `config list`.
 
@@ -60,7 +61,7 @@ $ config set ssh_pw AndPassWord
 
 > [!CAUTION]
 > Please note that the config storage is clear-text data held
-> in a region of the flash memory on the device. If someone
+> in a text file on the device SD card. If someone
 > has your device, it is possible to extract any credentials
 > from it simply by booting it up and running `config list`.
 
@@ -102,13 +103,17 @@ Operates on the config section of flash storage. This is 8KiB in size.
 
 > [!CAUTION]
 > Please note that the config storage is clear-text data held
-> in a region of the flash memory on the device. If someone
+> in a text file on the device SD card. If someone
 > has your device, it is possible to extract any credentials
 > from it simply by booting it up and running `config list`.
 
 ### free
 
 Shows memory usage information
+
+### help
+
+Shows available commands and their parameters
 
 ### ls
 
