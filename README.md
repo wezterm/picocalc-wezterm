@@ -111,6 +111,10 @@ Operates on the config section of flash storage. This is 8KiB in size.
 
 Shows memory usage information
 
+### help
+
+Shows available commands and their parameters
+
 ### ls
 
 Shows contents of a FAT SD card.  This is currently very basic and doesn't
