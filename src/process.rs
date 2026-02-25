@@ -115,6 +115,33 @@ impl LocalShell {
         })
     }
 
+    async fn help_command(&self) {
+        print!(
+            "\u{1b}[1mbat\u{1b}[0m\r\n\
+\u{1b}[2m  \u{1b}[0mShow battery charging status percentage\r\n\
+\u{1b}[1mbl\u{1b}[0m [kbd|lcd] PCT\r\n\
+\u{1b}[2m  \u{1b}[0mShow or set keyboard/LCD backlight\r\n\
+\u{1b}[1mbootsel\u{1b}[0m\r\n\
+\u{1b}[2m  \u{1b}[0mReboot into bootsel mode\r\n\
+\u{1b}[1mcls\u{1b}[0m\r\n\
+\u{1b}[2m  \u{1b}[0mClears the screen\r\n\
+\u{1b}[1mconfig\u{1b}[0m format|list|get KEY|rm KEY|set KEY VALUE\r\n\
+\u{1b}[2m  \u{1b}[0mOperates on the configuration parameters\r\n\
+\u{1b}[1mfree\u{1b}[0m\r\n\
+\u{1b}[2m  \u{1b}[0mShows memory usage information\r\n\
+\u{1b}[1mhelp\u{1b}[0m\r\n\
+\u{1b}[2m  \u{1b}[0mDisplays this help text\r\n\
+\u{1b}[1mls\u{1b}[0m [PATH]\r\n\
+\u{1b}[2m  \u{1b}[0mShows contents of a FAT SD card\r\n\
+\u{1b}[1mreboot\u{1b}[0m\r\n\
+\u{1b}[2m  \u{1b}[0mReboot the device\r\n\
+\u{1b}[1mssh\u{1b}[0m HOST|HOST COMMAND\r\n\
+\u{1b}[2m  \u{1b}[0mConnect to host and start a shell or cmd\r\n\
+\u{1b}[1mtime\u{1b}[0m\r\n\
+\u{1b}[2m  \u{1b}[0mShow the time\r\n"
+        );
+    }
+
     async fn dispatch_command(&self, command: &str) {
         if command.trim().is_empty() {
             return;
@@ -129,6 +156,7 @@ impl LocalShell {
             "cls" => crate::screen::cls_command(&argv).await,
             "config" => crate::config::config_command(&argv).await,
             "free" => crate::heap::free_command(&argv).await,
+            "help" => self.help_command().await,
             "ls" => ls_command(&argv).await,
             "reboot" => crate::keyboard::reboot(),
             "ssh" => crate::net::ssh_command(&argv).await,
